@@ -101,14 +101,8 @@ pub enum BlogArgs {
     /// ```bash
     /// # publish draft/FirstBlog to post/FirstBlog as public post
     /// tless blog publish FirstBlog
-    ///
-    /// # publish draft/FirstBlog to post/FirstBlog as private post
-    /// tless blog publish -p FirstBlog
     /// ```
     Publish {
-        #[arg(short, long)]
-        prva: bool,
-
         name: String,
     },
 }
@@ -222,8 +216,8 @@ fn handle_blog(blog: Blog) {
         BlogArgs::Remove { class, name } => {
             result_matcher!(blog::remove_blog(name, class), "Failed to remove blog")
         }
-        BlogArgs::Publish { prva, name } => {
-            result_matcher!(blog::publish_blog(name, *prva), "Failed to publish blog")
+        BlogArgs::Publish { name } => {
+            result_matcher!(blog::publish_blog(name), "Failed to publish blog")
         }
     }
 }

@@ -38,7 +38,7 @@ pub(crate) async fn render_to_file(events_path: Vec<PathBuf>) -> std::io::Result
     let public_dir = env::current_dir()?.join("public");
 
     let concurrency = num_cpus::get() + 1;
-    stream::iter(events_path.into_iter())
+    stream::iter(events_path)
         .map(|path| {
             let public_dir = public_dir.clone();
             async move {
@@ -87,7 +87,7 @@ pub(crate) async fn render_all() -> std::io::Result<()> {
     let site = SITE.load();
 
     let concurrency = num_cpus::get() + 1;
-    stream::iter(site.posts.clone().into_iter())
+    stream::iter(site.posts.clone())
         .map(|post| {
             let public_dir = public_dir.clone();
             async move {

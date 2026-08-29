@@ -438,9 +438,9 @@ impl Function for ListHelper {
                     }
                     "count" => {
                         if order == -1 {
-                            tmp.sort_by(|x, y| y.2.cmp(&x.2));
+                            tmp.sort_by_key(|y| std::cmp::Reverse(y.2));
                         } else {
-                            tmp.sort_by(|x, y| x.2.cmp(&y.2));
+                            tmp.sort_by_key(|x| x.2);
                         }
                     }
                     _ => {}

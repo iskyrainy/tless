@@ -29,7 +29,6 @@ pub(crate) static BASE_DIR: LazyLock<PathBuf> = LazyLock::new(|| env::current_di
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct Config {
     pub site: SiteConfig,
-    pub auth: AuthConfig,
 }
 
 /// Part of `[site]` configuration details.
@@ -53,12 +52,6 @@ pub(crate) struct SiteConfig {
 pub(crate) struct Menu {
     pub name: String,
     pub link: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct AuthConfig {
-    pub ak: String,
-    pub allows: Vec<String>,
 }
 
 /// Get the path to the configuration file (`tless.toml`) in the current directory.

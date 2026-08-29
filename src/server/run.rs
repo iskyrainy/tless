@@ -8,8 +8,6 @@ use crate::{
     server::{self, SITE, TERA, get_public_path, render},
 };
 
-use super::CONFIG;
-
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 pub async fn run(port: u16) -> std::io::Result<()> {
     // Start watching file change
@@ -37,13 +35,7 @@ fn init_server(
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
 ) -> Result<actix_web::dev::Server, std::io::Error> {
     let server = HttpServer::new(|| {
-        let auth = CONFIG.load().auth.clone();
-        let app_state = web::Data::new(AppState {
-            ak: auth.ak,
-            allows: Mutex::new(auth.allows),
-        });
         App::new()
-            .app_data(app_state)
             .service(hello)
             .service(login)
             .service(get_archive)

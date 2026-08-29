@@ -78,7 +78,7 @@ pub fn remove_blog(name: &String, class: &String) -> Result<(), Box<dyn Error>> 
 ///     Err(e) => eprintln!("Failed to publish blog: {}", e),
 /// }
 /// ```
-pub fn publish_blog(name: &String, prva: bool) -> Result<(), Box<dyn Error>> {
+pub fn publish_blog(name: &String) -> Result<(), Box<dyn Error>> {
     let draft_path = get_path(name, &String::from("draft"));
     if !is_file_exist(&draft_path) {
         return Err("Draft blog does not exist.".into());
@@ -89,12 +89,11 @@ pub fn publish_blog(name: &String, prva: bool) -> Result<(), Box<dyn Error>> {
     }
     let metadata = parse_file(PathBuf::from(&draft_path))?;
     let frontmatter = format!(
-        "---\ntitle: {}\ndate: {}\ntags: {}\ncategories: {}\nprva: {}\n---\n\n",
+        "---\ntitle: {}\ndate: {}\ntags: {}\ncategories: {}\n---\n\n",
         metadata.title,
         current_timestamp(),
         format_args!("[{}]", metadata.tags.unwrap_or_default().join(", ")),
         format_args!("[{}]", metadata.categories.unwrap_or_default().join(", ")),
-        prva
     );
     let file_str = fs::read_to_string(&draft_path)?;
     let content = format!("{}{}", frontmatter, file_str);
