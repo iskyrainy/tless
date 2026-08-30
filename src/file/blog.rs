@@ -2,6 +2,7 @@ use std::{env, error::Error, fs, path::PathBuf};
 
 use chrono::Utc;
 use chrono_tz::Tz;
+use tracing::info;
 
 use crate::file::{get_path, is_file_exist, parse_file};
 
@@ -16,8 +17,8 @@ use crate::file::{get_path, is_file_exist, parse_file};
 /// let name = String::from("my_new_blog");
 /// let class = String::from("draft");
 /// match add_blog(&name, &class) {
-///     Ok(_) => println!("Blog added successfully."),
-///     Err(e) => eprintln!("Failed to add blog: {}", e),
+///     Ok(_) => info!("Blog added successfully."),
+///     Err(e) => error!("Failed to add blog: {}", e),
 /// }
 /// ```
 pub fn add_blog(name: &String) -> Result<(), Box<dyn Error>> {
@@ -27,7 +28,7 @@ pub fn add_blog(name: &String) -> Result<(), Box<dyn Error>> {
         return Err("Blog already exists.".into());
     }
     fs::write(&file_path, base_blog_text())?;
-    println!("Blog '{}' created in 'draft'.", file_path);
+    info!("Blog '{}' created in 'draft'.", file_path);
     Ok(())
 }
 
@@ -49,8 +50,8 @@ fn base_blog_text() -> String {
 /// let name = String::from("my_old_blog");
 /// let class = String::from("post");
 /// match remove_blog(&name, &class) {
-///     Ok(_) => println!("Blog removed successfully."),
-///     Err(e) => eprintln!("Failed to remove blog: {}", e),
+///     Ok(_) => info!("Blog removed successfully."),
+///     Err(e) => error!("Failed to remove blog: {}", e),
 /// }
 /// ```
 pub fn remove_blog(name: &String, class: &String) -> Result<(), Box<dyn Error>> {
@@ -59,7 +60,7 @@ pub fn remove_blog(name: &String, class: &String) -> Result<(), Box<dyn Error>> 
         return Err("Blog does not exist.".into());
     }
     fs::remove_file(&file_path)?;
-    println!("Blog '{}' removed from '{}'.", name, class);
+    info!("Blog '{}' removed from '{}'.", name, class);
     Ok(())
 }
 
@@ -74,8 +75,8 @@ pub fn remove_blog(name: &String, class: &String) -> Result<(), Box<dyn Error>> 
 /// let name = String::from("my_draft_blog");
 /// let prva = false;
 /// match publish_blog(&name, prva) {
-///     Ok(_) => println!("Blog published successfully."),
-///     Err(e) => eprintln!("Failed to publish blog: {}", e),
+///     Ok(_) => info!("Blog published successfully."),
+///     Err(e) => error!("Failed to publish blog: {}", e),
 /// }
 /// ```
 pub fn publish_blog(name: &String) -> Result<(), Box<dyn Error>> {
@@ -99,7 +100,7 @@ pub fn publish_blog(name: &String) -> Result<(), Box<dyn Error>> {
     let content = format!("{}{}", frontmatter, file_str);
     fs::write(&post_path, content)?;
     fs::remove_file(&draft_path)?;
-    println!("Blog '{}' published from 'draft' to 'post'.", name);
+    info!("Blog '{}' published from 'draft' to 'post'.", name);
     Ok(())
 }
 

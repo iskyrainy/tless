@@ -13,6 +13,7 @@ use notify::EventKind;
 use notify_debouncer_full::new_debouncer;
 use serde::{Deserialize, Serialize};
 use tera::Tera;
+use tracing::{error, info};
 
 use crate::{
     file::{Metadata, parse_file},
@@ -117,10 +118,10 @@ pub(crate) async fn watch_config(
                             CONFIG.store(Arc::new(config));
                         })
                         .await;
-                        println!("Config reloaded.")
+                        info!("Config reloaded.")
                     }
                 }
-                Err(e) => println!("Config file watch error: {:?}", e),
+                Err(e) => error!("Config file watch error: {:?}", e),
             },
             Err(mpsc::TryRecvError::Empty) => {
                 // idle, sleep for 250ms
@@ -330,10 +331,10 @@ pub(crate) async fn watch_source(
                             SITE.store(Arc::new(site));
                         })
                         .await;
-                        println!("Site global info reloaded.");
+                        info!("Site global info reloaded.");
                     }
                 }
-                Err(e) => println!("Config file watch error: {:?}", e),
+                Err(e) => error!("Config file watch error: {:?}", e),
             },
             Err(mpsc::TryRecvError::Empty) => {
                 // idle, sleep for 250ms
@@ -352,7 +353,7 @@ pub(crate) fn get_layout_path() -> PathBuf {
     if dir.exists() {
         dir
     } else {
-        println!("Failed to init Tera");
+        error!("Failed to init Tera");
         std::process::exit(1)
     }
 }
@@ -362,7 +363,7 @@ pub(crate) static TERA: LazyLock<ArcSwap<Tera>> = LazyLock::new(|| {
     let tera = result_matcher!(
         Tera::new(&format!("{}/layout/*.html", layout_dir.to_string_lossy())),
         err_handler = |e| {
-            println!("Parsing error(s): {}", e);
+            error!("Parsing error(s): {}", e);
             std::process::exit(1)
         },
         ok_handler = |tera| {
@@ -412,10 +413,10 @@ pub(crate) async fn watch_layout(
                             }
                         })
                         .await;
-                        println!("TERA reloaded.");
+                        info!("TERA reloaded.");
                     }
                 }
-                Err(e) => println!("Layout template file watch error: {:?}", e),
+                Err(e) => error!("Layout template file watch error: {:?}", e),
             },
             Err(mpsc::TryRecvError::Empty) => {
                 // idle, sleep for 250ms
@@ -461,10 +462,10 @@ pub(crate) async fn watch_helper(
 
                     if interesting {
                         let _ = helper::load_rhai_helpers(&helper_path);
-                        println!("Helper reloaded.");
+                        info!("Helper reloaded.");
                     }
                 }
-                Err(e) => println!("Helper dir watch error: {:?}", e),
+                Err(e) => error!("Helper dir watch error: {:?}", e),
             },
             Err(mpsc::TryRecvError::Empty) => {
                 // idle, sleep for 250ms

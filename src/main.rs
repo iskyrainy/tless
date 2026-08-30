@@ -1,11 +1,6 @@
-use std::env::set_var;
-
-use tless::cmd::{self};
+use tless::cmd;
 
 fn main() {
-    unsafe {
-        set_var("RUST_LOG", "debug");
-    }
-    env_logger::init();
+    tless::init_logging();
     cmd::parse_cmd();
 }

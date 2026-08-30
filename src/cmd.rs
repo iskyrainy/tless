@@ -1,6 +1,7 @@
 use std::{env, process};
 
 use clap::{Args, Parser, Subcommand};
+use tracing::{error, info};
 
 use crate::{
     file::{blog, page},
@@ -102,9 +103,7 @@ pub enum BlogArgs {
     /// # publish draft/FirstBlog to post/FirstBlog as public post
     /// tless blog publish FirstBlog
     /// ```
-    Publish {
-        name: String,
-    },
+    Publish { name: String },
 }
 
 #[derive(Args, Debug)]
@@ -191,19 +190,19 @@ fn handle_server(server: Server) {
     let current_dir = match env::current_dir() {
         Ok(dir) => dir,
         Err(_) => {
-            eprintln!("Can not get current dir");
+            error!("Can not get current dir");
             process::exit(1);
         }
     };
     if !current_dir.join("tless.toml").exists() {
-        eprintln!("Can't find configure file in current dir.");
+        error!("Can't find configure file in current dir.");
         process::exit(1);
     }
     // check config file
     if server.run && server.port > 1024 && server.port < 65_535 {
         result_matcher!(run::run(server.port), "Failed to start server");
     } else {
-        println!(
+        error!(
             "Server not started. Use -r to run the server. Port must be between 1025 and 65534."
         );
         process::exit(1);
@@ -233,16 +232,16 @@ fn handle_page(page: Page) {
 
 fn handle_site(site: Site) {
     if site.init {
-        println!("Initializing site structure...");
+        info!("Initializing site structure...");
         result_matcher!(site::init(), "Failed to initialize site structure");
     } else if site.generate {
-        println!("Generating static pages...");
+        info!("Generating static pages...");
     } else if site.deploy {
-        println!("Deploying site to GitHub Pages...");
+        info!("Deploying site to GitHub Pages...");
     } else if site.backup {
-        println!("Backing up site data...");
+        info!("Backing up site data...");
     } else {
-        eprintln!("No valid site operation specified.");
+        error!("No valid site operation specified.");
         process::exit(1);
     }
 }

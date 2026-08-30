@@ -30,7 +30,7 @@ macro_rules! result_matcher {
     ($result:expr, $err_msg:expr) => {
         match $result {
             Err(err) => {
-                eprintln!("{}: {}", $err_msg, err);
+                tracing::error!("{}: {}", $err_msg, err);
                 std::process::exit(1);
             }
             Ok(suc) => suc,
@@ -39,11 +39,11 @@ macro_rules! result_matcher {
     ($result:expr, $err_msg:expr, $suc_msg:expr) => {
         match $result {
             Err(err) => {
-                eprintln!("{}: {}", $err_msg, err);
+                tracing::error!("{}: {}", $err_msg, err);
                 std::process::exit(1);
             }
             Ok(suc) => {
-                println!("{}", $suc_msg);
+                tracing::info!("{}", $suc_msg);
                 suc
             }
         }

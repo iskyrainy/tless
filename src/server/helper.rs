@@ -12,6 +12,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 use tera::{Function, Map, Number, Result, Tera, Value, to_value};
+use tracing::info;
 
 use crate::server::{CONFIG, SITE, TERA};
 
@@ -574,9 +575,7 @@ impl Function for PaginatorHelper {
                 let _ = write!(
                     html,
                     r#"<li><a class="pagination-link" href="{}{}">{}</a></li>"#,
-                    base,
-                    page,
-                    page
+                    base, page, page
                 );
             }
         }
@@ -963,7 +962,7 @@ pub(crate) fn load_rhai_helpers(helpers_dir: impl AsRef<Path>) -> Result<()> {
             // custom helper def: fn call(args) -> string/primitive
             let helper = RhaiHelper::new(engine.clone(), ast.clone(), "call");
             to_add.push((name.clone(), helper));
-            println!("Registered Rhai helper: {}", name);
+            info!("Registered Rhai helper: {}", name);
         }
     }
     let helpers = HELPER.load();

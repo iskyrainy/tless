@@ -17,6 +17,7 @@ use tokio::{
     fs::File,
     io::{AsyncWriteExt, BufWriter},
 };
+use tracing::{error, info};
 
 use crate::{
     file,
@@ -45,7 +46,7 @@ pub(crate) async fn render_to_file(events_path: Vec<PathBuf>) -> std::io::Result
                 let metadata = match file::parse_file(path.clone()) {
                     Ok(m) => m,
                     Err(e) => {
-                        eprintln!("Failed to parse changed post: {}", e);
+                        error!("Failed to parse changed post: {}", e);
                         return Err(std::io::Error::other(e.to_string()));
                     }
                 };
@@ -64,11 +65,11 @@ pub(crate) async fn render_to_file(events_path: Vec<PathBuf>) -> std::io::Result
                     Ok(rendered) => {
                         writer.write_all(rendered.as_bytes()).await?;
                         writer.flush().await?;
-                        println!("Rendered {}", metadata.title);
+                        info!("Rendered {}", metadata.title);
                         Ok(())
                     }
                     Err(e) => {
-                        eprintln!("Failed to render {}: {}", metadata.title, e);
+                        error!("Failed to render {}: {}", metadata.title, e);
                         Err(std::io::Error::other(e))
                     }
                 }
@@ -107,11 +108,11 @@ pub(crate) async fn render_all() -> std::io::Result<()> {
                     Ok(rendered) => {
                         writer.write_all(rendered.as_bytes()).await?;
                         writer.flush().await?;
-                        println!("Rendered {}", post.title);
+                        info!("Rendered {}", post.title);
                         Ok(())
                     }
                     Err(e) => {
-                        eprintln!("Failed to render {}: {}", post.title, e);
+                        error!("Failed to render {}: {}", post.title, e);
                         Err(std::io::Error::other(e))
                     }
                 }
@@ -174,7 +175,10 @@ pub(crate) async fn pre_hash_check(path: &PathBuf) -> std::io::Result<(bool, Str
     let hash_value = HEXUPPER.encode(hash.as_ref());
     let post_hash = POST_HASH.load();
 
-    if post_hash.get(&path_str).is_some_and(|saved| saved == &hash_value) {
+    if post_hash
+        .get(&path_str)
+        .is_some_and(|saved| saved == &hash_value)
+    {
         return Ok((false, file_text));
     }
 
@@ -191,16 +195,16 @@ pub(crate) async fn dump_json() {
     let json_str = match serde_json::to_string(map) {
         Ok(str) => str,
         Err(e) => {
-            println!("Failed to dump post hash values: {}", e);
+            info!("Failed to dump post hash values: {}", e);
             String::new()
-        },
+        }
     };
     let post_hash = env::current_dir()
         .unwrap()
         .join("public")
         .join(".post_hash.json");
     match tokio::fs::write(post_hash, json_str).await {
-        Ok(_) => println!(".post_hash.json updated"),
-        Err(e) => println!("Failed to dump post hash values: {}", e),
+        Ok(_) => info!(".post_hash.json updated"),
+        Err(e) => error!("Failed to dump post hash values: {}", e),
     }
 }

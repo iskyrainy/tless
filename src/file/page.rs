@@ -14,8 +14,8 @@ use crate::file::{get_path, is_file_exist};
 /// ```
 /// let name = String::from("About");
 /// match add_page(&name) {
-///     Ok(_) => println!("Page added successfully."),
-///     Err(e) => println!("Failed to add page: {}", e),
+///     Ok(_) => info!("Page added successfully."),
+///     Err(e) => error!("Failed to add page: {}", e),
 /// }
 /// ```
 pub fn add_page(name: &String) -> Result<(), Box<dyn Error>> {
@@ -46,8 +46,8 @@ fn base_page_text(name: &String) -> String {
 /// ```
 /// let name = String::from("About");
 /// match remove_page(&name) {
-///     Ok(_) => println!("Page removed successfully."),
-///     Err(e) => println!("Failed to remove page: {}", e),
+///     Ok(_) => info!("Page removed successfully."),
+///     Err(e) => error!("Failed to remove page: {}", e),
 /// }
 /// ```
 pub fn remove_page(name: &String) -> Result<(), Box<dyn Error>> {

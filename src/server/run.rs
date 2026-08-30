@@ -1,7 +1,7 @@
-use std::sync::Mutex;
-
-use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, get, post, web};
+use actix_web::{App, HttpResponse, HttpServer, Responder, get, web};
 use tera::Context;
+use tokio::fs;
+use tracing::info;
 
 use crate::{
     result_matcher,
@@ -24,20 +24,13 @@ pub async fn run(port: u16) -> std::io::Result<()> {
     server.await
 }
 
-#[derive(Debug)]
-struct AppState {
-    ak: String,
-    allows: Mutex<Vec<String>>,
-}
-
 fn init_server(
     port: u16,
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
 ) -> Result<actix_web::dev::Server, std::io::Error> {
     let server = HttpServer::new(|| {
         App::new()
-            .service(hello)
-            .service(login)
+            .service(hi)
             .service(get_archive)
             .service(get_category)
             .service(get_tag)
@@ -48,7 +41,7 @@ fn init_server(
             .await
             .expect("Failed to listen for ctrl_c");
         let _ = shutdown_tx.send(());
-        println!("\nReceived exit signal, shutting down...");
+        info!("\nReceived exit signal, shutting down...");
     })
     .shutdown_timeout(60)
     .bind(("0.0.0.0", port))?
@@ -56,75 +49,26 @@ fn init_server(
     Ok(server)
 }
 
-#[get("/")]
-async fn hello() -> impl Responder {
-    HttpResponse::Ok().body("Hello world!")
+#[get("/hi")]
+async fn hi() -> impl Responder {
+    HttpResponse::Ok().body("hi")
 }
 
 #[get("/{page}")]
 async fn get_page(page: web::Path<String>) -> impl Responder {
     let page_name = page.into_inner();
-    let mut context = Context::new();
-    let site = &SITE.load();
-    context.insert("post", &site.posts);
-    context.insert("tags", &site.tags);
-    context.insert("categories", &site.categories);
-    context.insert("page", &page_name);
-    match TERA
-        .load()
-        .render(format!("{}.html", page_name).as_str(), &context)
-    {
-        Ok(res) => HttpResponse::Ok().body(res),
-        Err(_) => HttpResponse::ExpectationFailed().body("Failed to render page"),
+    match fs::read_to_string(get_public_path(&page_name)).await {
+        Ok(html) => HttpResponse::Ok()
+            .content_type("text/html; charset=utf-8")
+            .body(html),
+        Err(_) => HttpResponse::NotFound().body("Page not found"),
     }
 }
 
-fn get_real_ip(req: &HttpRequest) -> String {
-    req.connection_info()
-        .realip_remote_addr()
-        .unwrap_or("unknown")
-        .to_string()
-}
-
-#[post("/login")]
-async fn login(
-    ak: web::Json<String>,
-    req: HttpRequest,
-    data: web::Data<AppState>,
-) -> impl Responder {
-    if data.ak == *ak {
-        let real_ip = get_real_ip(&req);
-        let mut allows = data.allows.lock().unwrap();
-        if !allows.contains(&real_ip) {
-            allows.push(real_ip);
-        }
-        HttpResponse::Ok().body("AK passed")
-    } else {
-        HttpResponse::Unauthorized().body("AK failed")
-    }
-}
-
-#[get("/archives/{post}")]
-async fn get_archive(
-    post: web::Path<String>,
-    req: HttpRequest,
-    data: web::Data<AppState>,
-) -> impl Responder {
+#[get("/post/{post}")]
+async fn get_archive(post: web::Path<String>) -> impl Responder {
     let post_name = post.into_inner();
-    let is_private = SITE
-        .load()
-        .posts
-        .iter()
-        .any(|p| p.title == post_name && p.prva);
-    if is_private {
-        let real_ip = get_real_ip(&req);
-        let allows = data.allows.lock().unwrap();
-        if !allows.contains(&real_ip) {
-            return HttpResponse::Forbidden().body("No right to access private post");
-        }
-    }
-
-    match tokio::fs::read_to_string(get_public_path(&post_name)).await {
+    match fs::read_to_string(get_public_path(&post_name)).await {
         Ok(html) => HttpResponse::Ok()
             .content_type("text/html; charset=utf-8")
             .body(html),
