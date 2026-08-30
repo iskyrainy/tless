@@ -1,11 +1,12 @@
+use std::path::PathBuf;
+
 use actix_web::{App, HttpResponse, HttpServer, Responder, get, web};
-use tera::Context;
 use tokio::fs;
 use tracing::info;
 
 use crate::{
     result_matcher,
-    server::{self, SITE, TERA, get_public_path, render},
+    server::{self, BASE_DIR, get_public_path, render},
 };
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
@@ -31,6 +32,7 @@ fn init_server(
     let server = HttpServer::new(|| {
         App::new()
             .service(hi)
+            .service(get_page)
             .service(get_archive)
             .service(get_category)
             .service(get_tag)
@@ -57,7 +59,11 @@ async fn hi() -> impl Responder {
 #[get("/{page}")]
 async fn get_page(page: web::Path<String>) -> impl Responder {
     let page_name = page.into_inner();
-    match fs::read_to_string(get_public_path(&page_name)).await {
+    let safe_path = match validate_and_get_path(&page_name) {
+        Ok(path) => path,
+        Err(_) => return HttpResponse::BadRequest().body("Invalid page name"),
+    };
+    match fs::read_to_string(safe_path).await {
         Ok(html) => HttpResponse::Ok()
             .content_type("text/html; charset=utf-8")
             .body(html),
@@ -68,7 +74,11 @@ async fn get_page(page: web::Path<String>) -> impl Responder {
 #[get("/post/{post}")]
 async fn get_archive(post: web::Path<String>) -> impl Responder {
     let post_name = post.into_inner();
-    match fs::read_to_string(get_public_path(&post_name)).await {
+    let safe_path = match validate_and_get_path(&post_name) {
+        Ok(path) => path,
+        Err(_) => return HttpResponse::BadRequest().body("Invalid page name"),
+    };
+    match fs::read_to_string(safe_path).await {
         Ok(html) => HttpResponse::Ok()
             .content_type("text/html; charset=utf-8")
             .body(html),
@@ -79,23 +89,50 @@ async fn get_archive(post: web::Path<String>) -> impl Responder {
 #[get("/categories/{category}")]
 async fn get_category(category: web::Path<String>) -> impl Responder {
     let category_name = category.into_inner();
-    let mut context = Context::new();
-    let site = &SITE.load();
-    context.insert("post", &site.posts);
-    context.insert("tags", &site.tags);
-    context.insert("categories", &site.categories);
-    context.insert("name", &category_name);
-    HttpResponse::Ok().body(TERA.load().render("category.html", &context).unwrap())
+    let safe_path = match validate_and_get_path(&category_name) {
+        Ok(path) => path,
+        Err(_) => return HttpResponse::BadRequest().body("Invalid category name"),
+    };
+    match fs::read_to_string(safe_path).await {
+        Ok(html) => HttpResponse::Ok()
+            .content_type("text/html; charset=utf-8")
+            .body(html),
+        Err(_) => HttpResponse::NotFound().body("Category not found"),
+    }
 }
 
 #[get("/tags/{tag}")]
 async fn get_tag(tag: web::Path<String>) -> impl Responder {
     let tag_name = tag.into_inner();
-    let mut context = Context::new();
-    let site = &SITE.load();
-    context.insert("post", &site.posts);
-    context.insert("tags", &site.tags);
-    context.insert("categories", &site.categories);
-    context.insert("name", &tag_name);
-    HttpResponse::Ok().body(TERA.load().render("category.html", &context).unwrap())
+    let safe_path = match validate_and_get_path(&tag_name) {
+        Ok(path) => path,
+        Err(_) => return HttpResponse::BadRequest().body("Invalid tag name"),
+    };
+    match fs::read_to_string(safe_path).await {
+        Ok(html) => HttpResponse::Ok()
+            .content_type("text/html; charset=utf-8")
+            .body(html),
+        Err(_) => HttpResponse::NotFound().body("Tag not found"),
+    }
+}
+
+fn validate_and_get_path(file_name: &String) -> Result<PathBuf, &'static str> {
+    if file_name.contains("..") || file_name.contains('/') || file_name.contains('\\') {
+        return Err("Invalid path");
+    }
+
+    if !file_name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("Invalid characters");
+    }
+
+    let full_path = get_public_path(file_name);
+
+    if !full_path.starts_with(BASE_DIR.to_path_buf()) {
+        return Err("Path traversal detected");
+    }
+
+    Ok(full_path)
 }
