@@ -14,14 +14,14 @@ use ring::digest::{self, SHA256};
 use serde::{Deserialize, Serialize};
 use tera::Context;
 use tokio::{
-    fs::File,
+    fs::{self, File},
     io::{AsyncWriteExt, BufWriter},
 };
 use tracing::{error, info};
 
 use crate::{
     file,
-    server::{SITE, TERA},
+    server::{SITE, TERA, get_public_path},
 };
 
 /// Markdown default render options.
@@ -35,8 +35,8 @@ pub(crate) fn render(markdown: &str) -> String {
     html_output
 }
 
-pub(crate) async fn render_to_file(events_path: Vec<PathBuf>) -> std::io::Result<()> {
-    let public_dir = env::current_dir()?.join("public");
+pub(crate) async fn render_to_file(events_path: &Vec<PathBuf>) -> std::io::Result<()> {
+    let public_dir = Arc::new(get_public_path("."));
 
     let concurrency = num_cpus::get() + 1;
     stream::iter(events_path)
@@ -50,7 +50,7 @@ pub(crate) async fn render_to_file(events_path: Vec<PathBuf>) -> std::io::Result
                         return Err(std::io::Error::other(e.to_string()));
                     }
                 };
-                let (modify_flag, file_str) = pre_hash_check(&path).await?;
+                let (modify_flag, file_str) = pre_hash_check(path).await?;
                 if !modify_flag {
                     return Ok(());
                 }
@@ -150,10 +150,6 @@ pub(crate) static POST_HASH: LazyLock<ArcSwap<HashMap<String, String>>> = LazyLo
     ArcSwap::from_pointee(map)
 });
 
-fn get_post_hash_path() -> std::io::Result<PathBuf> {
-    Ok(env::current_dir()?.join("public").join(".post_hash.json"))
-}
-
 async fn persist_post_hash(hash_map: &HashMap<String, String>) -> std::io::Result<()> {
     let hash_values: Vec<HashValue> = hash_map
         .iter()
@@ -163,11 +159,11 @@ async fn persist_post_hash(hash_map: &HashMap<String, String>) -> std::io::Resul
         })
         .collect();
     let json = serde_json::to_vec_pretty(&hash_values).map_err(std::io::Error::other)?;
-    tokio::fs::write(get_post_hash_path()?, json).await
+    fs::write(get_public_path(".post_hash.json"), json).await
 }
 
 pub(crate) async fn pre_hash_check(path: &PathBuf) -> std::io::Result<(bool, String)> {
-    let file_text = tokio::fs::read_to_string(path).await?;
+    let file_text = fs::read_to_string(path).await?;
     let path_str = path.to_string_lossy().to_string();
     let mut context = digest::Context::new(&SHA256);
     context.update(file_text.as_bytes());
@@ -199,11 +195,8 @@ pub(crate) async fn dump_json() {
             String::new()
         }
     };
-    let post_hash = env::current_dir()
-        .unwrap()
-        .join("public")
-        .join(".post_hash.json");
-    match tokio::fs::write(post_hash, json_str).await {
+    let post_hash = get_public_path(".post_hash.json");
+    match fs::write(post_hash, json_str).await {
         Ok(_) => info!(".post_hash.json updated"),
         Err(e) => error!("Failed to dump post hash values: {}", e),
     }

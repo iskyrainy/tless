@@ -1,18 +1,18 @@
 use std::{
     collections::HashMap,
-    env,
-    error::Error,
-    fs,
+    env, fs,
     path::{self, PathBuf},
     sync::{Arc, LazyLock, mpsc},
     time::Duration,
 };
 
+use anyhow::Result;
 use arc_swap::ArcSwap;
 use notify::EventKind;
 use notify_debouncer_full::new_debouncer;
 use serde::{Deserialize, Serialize};
 use tera::Tera;
+use tokio::select;
 use tracing::{error, info};
 
 use crate::{
@@ -82,7 +82,7 @@ pub(crate) static CONFIG: LazyLock<ArcSwap<Config>> = LazyLock::new(|| {
 /// * `shutdown_rx` - A receiver to listen for shutdown signals.
 pub(crate) async fn watch_config(
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let config_path = get_config_path();
 
     // notify-debouncer-mini debounce window size: 1000ms
@@ -95,40 +95,33 @@ pub(crate) async fn watch_config(
             break;
         }
         match rx.try_recv() {
-            Ok(res) => match res {
-                Ok(events) => {
-                    let interesting = events.iter().any(|e| {
-                        let event = &e.event;
-                        match event.kind {
-                            EventKind::Modify(_) => true,
-                            EventKind::Create(_) | EventKind::Remove(_) => {
-                                result_matcher!(
-                                    debouncer
-                                        .watch(&config_path, notify::RecursiveMode::NonRecursive),
-                                    "Config file watch error"
-                                );
-                                true
-                            }
-                            _ => false,
+            Ok(Ok(events)) => {
+                let interesting = events.iter().any(|e| {
+                    let event = &e.event;
+                    match event.kind {
+                        EventKind::Modify(_) => true,
+                        EventKind::Create(_) | EventKind::Remove(_) => {
+                            result_matcher!(
+                                debouncer.watch(&config_path, notify::RecursiveMode::NonRecursive),
+                                "Config file watch error"
+                            );
+                            true
                         }
-                    });
-                    if interesting {
-                        let _ = tokio::task::spawn_blocking(|| {
-                            let config = get_config_toml();
-                            CONFIG.store(Arc::new(config));
-                        })
-                        .await;
-                        info!("Config reloaded.")
+                        _ => false,
                     }
+                });
+                if interesting {
+                    let config = get_config_toml();
+                    CONFIG.store(Arc::new(config));
+                    info!("Config reloaded.")
                 }
-                Err(e) => error!("Config file watch error: {:?}", e),
-            },
+            }
             Err(mpsc::TryRecvError::Empty) => {
                 // idle, sleep for 250ms
                 tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
             }
-            Err(_) => {
-                return Err("Failed to receive config file change event.".into());
+            _ => {
+                error!("Failed to receive config file change event.");
             }
         }
     }
@@ -288,7 +281,7 @@ pub(crate) static SITE: LazyLock<ArcSwap<Site>> = LazyLock::new(|| {
 
 pub(crate) async fn watch_source(
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let source_path = get_source_path();
 
     // notify-debouncer-mini debounce window size: 1000ms
@@ -301,47 +294,38 @@ pub(crate) async fn watch_source(
             break;
         }
         match rx.try_recv() {
-            Ok(res) => match res {
-                Ok(events) => {
-                    let interesting = events.iter().any(|e| {
-                        let event = &e.event;
-                        match event.kind {
-                            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
-                            _ => return false,
-                        };
-                        event.paths.iter().any(|p| {
-                            if is_source_file(p) {
-                                let paths = event.paths.clone();
-                                tokio::spawn(async move {
-                                    result_matcher!(
-                                        render::render_to_file(paths).await,
-                                        "Failed to render changed markdown to file"
-                                    );
-                                });
-                                true
-                            } else {
-                                false
-                            }
-                        })
-                    });
-
-                    if interesting {
-                        let _ = tokio::task::spawn_blocking(|| {
-                            let site = get_site();
-                            SITE.store(Arc::new(site));
-                        })
-                        .await;
-                        info!("Site global info reloaded.");
+            Ok(Ok(events)) => {
+                let mut update_flag = false;
+                for e in events {
+                    let event = &e.event;
+                    match event.kind {
+                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
+                        _ => {}
+                    };
+                    for p in &event.paths {
+                        if is_source_file(p) {
+                            let paths = &event.paths;
+                            result_matcher!(
+                                render::render_to_file(paths).await,
+                                "Failed to render changed markdown to file"
+                            );
+                            update_flag = true;
+                        }
                     }
                 }
-                Err(e) => error!("Config file watch error: {:?}", e),
-            },
+
+                if update_flag {
+                    let site = get_site();
+                    SITE.store(Arc::new(site));
+                    info!("Site global info reloaded.");
+                }
+            }
             Err(mpsc::TryRecvError::Empty) => {
                 // idle, sleep for 250ms
                 tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
             }
-            Err(_) => {
-                return Err("Failed to receive source file change event.".into());
+            _ => {
+                error!("Failed to receive source file change event.");
             }
         }
     }
@@ -375,7 +359,7 @@ pub(crate) static TERA: LazyLock<ArcSwap<Tera>> = LazyLock::new(|| {
 
 pub(crate) async fn watch_layout(
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let theme_path = get_layout_path();
 
     // notify-debouncer-mini debounce window size: 1000ms
@@ -388,55 +372,49 @@ pub(crate) async fn watch_layout(
             break;
         }
         match rx.try_recv() {
-            Ok(res) => match res {
-                Ok(events) => {
-                    let interesting = events.iter().any(|e| {
-                        let event = &e.event;
-                        match event.kind {
-                            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
-                            _ => return false,
-                        };
-                        event.paths.iter().any(|p| is_source_file(p))
-                    });
+            Ok(Ok(events)) => {
+                let interesting = events.iter().any(|e| {
+                    let event = &e.event;
+                    match event.kind {
+                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
+                        _ => return false,
+                    };
+                    event.paths.iter().any(|p| is_source_file(p))
+                });
 
-                    if interesting {
-                        let _ = tokio::task::spawn_blocking(|| {
-                            let tera = TERA.load();
-                            let mut clone = tera.as_ref().clone();
-                            result_matcher!(clone.full_reload(), "Failed to reload templates");
-                            TERA.store(Arc::new(clone));
-                            async {
-                                result_matcher!(
-                                    render::render_all().await,
-                                    "Failed to render posts"
-                                );
-                            }
-                        })
-                        .await;
-                        info!("TERA reloaded.");
-                    }
+                if interesting {
+                    let _ = tokio::task::spawn_blocking(|| {
+                        let tera = TERA.load();
+                        let mut clone = tera.as_ref().clone();
+                        result_matcher!(clone.full_reload(), "Failed to reload templates");
+                        TERA.store(Arc::new(clone));
+                        async {
+                            result_matcher!(render::render_all().await, "Failed to render posts");
+                        }
+                    })
+                    .await;
+                    info!("TERA reloaded.");
                 }
-                Err(e) => error!("Layout template file watch error: {:?}", e),
-            },
+            }
             Err(mpsc::TryRecvError::Empty) => {
                 // idle, sleep for 250ms
                 tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
             }
-            Err(_) => {
-                return Err("Failed to receive layout file change event.".into());
+            _ => {
+                error!("Failed to receive layout file change event.");
             }
         }
     }
     Ok(())
 }
 
-pub(crate) fn get_public_path(name: &String) -> PathBuf {
-    BASE_DIR.join("public").join(name)
+pub(crate) fn get_public_path<'a, S: Into<&'a str>>(name: S) -> PathBuf {
+    BASE_DIR.join("public").join(name.into())
 }
 
 pub(crate) async fn watch_helper(
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let helper_path = BASE_DIR.join("helper");
 
     // notify-debouncer-mini debounce window size: 1000ms
@@ -449,30 +427,27 @@ pub(crate) async fn watch_helper(
             break;
         }
         match rx.try_recv() {
-            Ok(res) => match res {
-                Ok(events) => {
-                    let interesting = events.iter().any(|e| {
-                        let event = &e.event;
-                        match event.kind {
-                            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
-                            _ => return false,
-                        };
-                        event.paths.iter().any(|p| is_source_file(p))
-                    });
+            Ok(Ok(events)) => {
+                let interesting = events.iter().any(|e| {
+                    let event = &e.event;
+                    match event.kind {
+                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
+                        _ => return false,
+                    };
+                    event.paths.iter().any(|p| is_source_file(p))
+                });
 
-                    if interesting {
-                        let _ = helper::load_rhai_helpers(&helper_path);
-                        info!("Helper reloaded.");
-                    }
+                if interesting {
+                    let _ = helper::load_rhai_helpers(&helper_path);
+                    info!("Helper reloaded.");
                 }
-                Err(e) => error!("Helper dir watch error: {:?}", e),
-            },
+            }
             Err(mpsc::TryRecvError::Empty) => {
                 // idle, sleep for 250ms
                 tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
             }
-            Err(_) => {
-                return Err("Failed to receive helper dir change event.".into());
+            _ => {
+                error!("Failed to receive helper dir change event.");
             }
         }
     }
@@ -482,24 +457,11 @@ pub(crate) async fn watch_helper(
 /// Start watching.
 /// # Arguments
 /// * `shutdown_tx` - Subscribe the sender to recv a shutdown signal.
-pub(crate) fn start_watch(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
-    let clone = shutdown_tx.subscribe();
-    tokio::spawn(async move {
-        result_matcher!(
-            watch_config(clone).await,
-            "Failed to watch configuration file"
-        );
-    });
-    let clone = shutdown_tx.subscribe();
-    tokio::spawn(async move {
-        result_matcher!(watch_source(clone).await, "Failed to watch source dir");
-    });
-    let clone = shutdown_tx.subscribe();
-    tokio::spawn(async move {
-        result_matcher!(watch_layout(clone).await, "Failed to watch layout dir");
-    });
-    let clone = shutdown_tx.subscribe();
-    tokio::spawn(async move {
-        result_matcher!(watch_helper(clone).await, "Failed to watch helper dir");
-    });
+pub(crate) async fn start_watch(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
+    select! {
+        _ = watch_config(shutdown_tx.subscribe()) => {},
+        _ = watch_source(shutdown_tx.subscribe()) => {},
+        _ = watch_layout(shutdown_tx.subscribe()) => {},
+        _ = watch_helper(shutdown_tx.subscribe()) => {},
+    }
 }

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use actix_web::{App, HttpResponse, HttpServer, Responder, get, web};
-use tokio::fs;
+use tokio::{fs, select};
 use tracing::info;
 
 use crate::{
@@ -13,16 +13,19 @@ use crate::{
 pub async fn run(port: u16) -> std::io::Result<()> {
     // Start watching file change
     let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
-    server::start_watch(shutdown_tx.clone());
 
     // Render all posts
     result_matcher!(render::render_all().await, "Failed to render posts");
 
     // Initialize the server
-    let server = init_server(port, shutdown_tx)?;
+    let server = init_server(port, shutdown_tx.clone())?;
 
     // Run the server
-    server.await
+    select! {
+        _ = server::start_watch(shutdown_tx) => {},
+        _ = server => {},
+    }
+    Ok(())
 }
 
 fn init_server(
@@ -116,7 +119,7 @@ async fn get_tag(tag: web::Path<String>) -> impl Responder {
     }
 }
 
-fn validate_and_get_path(file_name: &String) -> Result<PathBuf, &'static str> {
+fn validate_and_get_path(file_name: &str) -> Result<PathBuf, &'static str> {
     if file_name.contains("..") || file_name.contains('/') || file_name.contains('\\') {
         return Err("Invalid path");
     }

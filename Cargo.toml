@@ -2,12 +2,23 @@
 name = "tless"
 version = "0.1.0"
 edition = "2024"
+authors = ["gdhvxcj <wangnan5117@gmail.com>"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
 
 [profile.dev]
-opt-level = 0
+opt-level = 0 # Optimization level: 0-3, "s" (size), "z" (extra size)
+lto = true    # Link-Time Optimization (true/false/"thin") for cross-crate optimization
+strip = true  # Automatically strip symbols and debug info (true/"debuginfo"/"symbols")
+debug = false # Exclude debug symbols entirely
 
 [profile.release]
-opt-level = 3
+opt-level = 3     # Optimization level: 0-3, "s" (size), "z" (extra size)
+lto = true        # Link-Time Optimization (true/false/"thin") for cross-crate optimization
+codegen-units = 1 # Reduce parallel compilation blocks to 1 for better optimizations
+strip = true      # Automatically strip symbols and debug info (true/"debuginfo"/"symbols")
+debug = false     # Exclude debug symbols entirely
 
 [dependencies]
 actix-web = "4"
