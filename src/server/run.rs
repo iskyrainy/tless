@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use actix_web::{App, HttpResponse, HttpServer, Responder, get, web};
 use tokio::{fs, select};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     result_matcher,
@@ -46,7 +46,7 @@ fn init_server(
             .await
             .expect("Failed to listen for ctrl_c");
         let _ = shutdown_tx.send(());
-        info!("\nReceived exit signal, shutting down...");
+        info!("Received exit signal, shutting down...");
     })
     .shutdown_timeout(60)
     .bind(("0.0.0.0", port))?
@@ -61,61 +61,41 @@ async fn hi() -> impl Responder {
 
 #[get("/{page}")]
 async fn get_page(page: web::Path<String>) -> impl Responder {
-    let page_name = page.into_inner();
-    let safe_path = match validate_and_get_path(&page_name) {
-        Ok(path) => path,
-        Err(_) => return HttpResponse::BadRequest().body("Invalid page name"),
-    };
-    match fs::read_to_string(safe_path).await {
-        Ok(html) => HttpResponse::Ok()
-            .content_type("text/html; charset=utf-8")
-            .body(html),
-        Err(_) => HttpResponse::NotFound().body("Page not found"),
-    }
+    let name = page.into_inner();
+    get_static_file(name).await
 }
 
 #[get("/post/{post}")]
 async fn get_archive(post: web::Path<String>) -> impl Responder {
-    let post_name = post.into_inner();
-    let safe_path = match validate_and_get_path(&post_name) {
-        Ok(path) => path,
-        Err(_) => return HttpResponse::BadRequest().body("Invalid page name"),
-    };
-    match fs::read_to_string(safe_path).await {
-        Ok(html) => HttpResponse::Ok()
-            .content_type("text/html; charset=utf-8")
-            .body(html),
-        Err(_) => HttpResponse::NotFound().body("Post not found"),
-    }
+    let name = post.into_inner();
+    get_static_file(name).await
 }
 
 #[get("/categories/{category}")]
 async fn get_category(category: web::Path<String>) -> impl Responder {
-    let category_name = category.into_inner();
-    let safe_path = match validate_and_get_path(&category_name) {
-        Ok(path) => path,
-        Err(_) => return HttpResponse::BadRequest().body("Invalid category name"),
-    };
-    match fs::read_to_string(safe_path).await {
-        Ok(html) => HttpResponse::Ok()
-            .content_type("text/html; charset=utf-8")
-            .body(html),
-        Err(_) => HttpResponse::NotFound().body("Category not found"),
-    }
+    let name = category.into_inner();
+    get_static_file(name).await
 }
 
 #[get("/tags/{tag}")]
 async fn get_tag(tag: web::Path<String>) -> impl Responder {
-    let tag_name = tag.into_inner();
-    let safe_path = match validate_and_get_path(&tag_name) {
+    let name = tag.into_inner();
+    get_static_file(name).await
+}
+
+async fn get_static_file(name: String) -> impl Responder {
+    let safe_path = match validate_and_get_path(&name) {
         Ok(path) => path,
-        Err(_) => return HttpResponse::BadRequest().body("Invalid tag name"),
+        Err(e) => {
+            warn!("BadRequest: request name: {}, error info: {}", name, e);
+            return HttpResponse::BadRequest().body("Invalid target");
+        }
     };
     match fs::read_to_string(safe_path).await {
         Ok(html) => HttpResponse::Ok()
             .content_type("text/html; charset=utf-8")
             .body(html),
-        Err(_) => HttpResponse::NotFound().body("Tag not found"),
+        Err(_) => HttpResponse::NotFound().body("Target not found"),
     }
 }
 

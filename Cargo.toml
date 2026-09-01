@@ -9,9 +9,6 @@ unsafe_code = "forbid"
 
 [profile.dev]
 opt-level = 0 # Optimization level: 0-3, "s" (size), "z" (extra size)
-lto = true    # Link-Time Optimization (true/false/"thin") for cross-crate optimization
-strip = true  # Automatically strip symbols and debug info (true/"debuginfo"/"symbols")
-debug = false # Exclude debug symbols entirely
 
 [profile.release]
 opt-level = 3     # Optimization level: 0-3, "s" (size), "z" (extra size)

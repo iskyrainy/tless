@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    env,
     io::BufReader,
     path::PathBuf,
     sync::{Arc, LazyLock},
@@ -50,10 +49,11 @@ pub(crate) async fn render_to_file(events_path: &Vec<PathBuf>) -> std::io::Resul
                         return Err(std::io::Error::other(e.to_string()));
                     }
                 };
-                let (modify_flag, file_str) = pre_hash_check(path).await?;
-                if !modify_flag {
-                    return Ok(());
-                }
+                let file_str = match pre_hash_check(path).await? {
+                    Some(s) => s,
+                    None => return Ok(()),
+                };
+
                 let md_html_str = render(&file_str);
                 let file_path = public_dir.join(&metadata.title);
                 let file = File::create(&file_path).await?;
@@ -82,46 +82,22 @@ pub(crate) async fn render_to_file(events_path: &Vec<PathBuf>) -> std::io::Resul
     Ok(())
 }
 
-/// Render all posts to public dir.
+/// Render all posts and pages to public dir.
 pub(crate) async fn render_all() -> std::io::Result<()> {
-    let public_dir = env::current_dir()?.join("public");
     let site = SITE.load();
-
-    let concurrency = num_cpus::get() + 1;
-    stream::iter(site.posts.clone())
-        .map(|post| {
-            let public_dir = public_dir.clone();
-            async move {
-                let (modify_flag, file_str) = pre_hash_check(&post.path).await?;
-                if !modify_flag {
-                    return Ok(());
-                }
-                let md_html_str = render(&file_str);
-                let file_path: PathBuf = public_dir.join(&post.title);
-                let file = File::create(&file_path).await?;
-                let mut writer = BufWriter::new(file);
-
-                let mut context = Context::new();
-                context.insert("content", &md_html_str);
-
-                match TERA.load().render("archive.html", &context) {
-                    Ok(rendered) => {
-                        writer.write_all(rendered.as_bytes()).await?;
-                        writer.flush().await?;
-                        info!("Rendered {}", post.title);
-                        Ok(())
-                    }
-                    Err(e) => {
-                        error!("Failed to render {}: {}", post.title, e);
-                        Err(std::io::Error::other(e))
-                    }
-                }
-            }
-        })
-        .buffer_unordered(concurrency)
-        .collect::<Vec<_>>()
-        .await;
-    dump_json().await;
+    let mut paths = site
+        .posts
+        .iter()
+        .map(|d| d.path.clone())
+        .collect::<Vec<_>>();
+    paths.append(
+        &mut site
+            .pages
+            .iter()
+            .map(|d| d.path.clone())
+            .collect::<Vec<_>>(),
+    );
+    render_to_file(&paths).await?;
     Ok(())
 }
 
@@ -133,10 +109,7 @@ pub(crate) struct HashValue {
 
 pub(crate) static POST_HASH: LazyLock<ArcSwap<HashMap<String, String>>> = LazyLock::new(|| {
     let mut map = HashMap::new();
-    let post_hash = env::current_dir()
-        .unwrap()
-        .join("public")
-        .join(".post_hash.json");
+    let post_hash = get_public_path(".post_hash.json");
     if !post_hash.exists() {
         let _ = std::fs::File::create_new(post_hash).unwrap();
     } else {
@@ -150,19 +123,7 @@ pub(crate) static POST_HASH: LazyLock<ArcSwap<HashMap<String, String>>> = LazyLo
     ArcSwap::from_pointee(map)
 });
 
-async fn persist_post_hash(hash_map: &HashMap<String, String>) -> std::io::Result<()> {
-    let hash_values: Vec<HashValue> = hash_map
-        .iter()
-        .map(|(path, hash_v)| HashValue {
-            path: path.clone(),
-            hash_v: hash_v.clone(),
-        })
-        .collect();
-    let json = serde_json::to_vec_pretty(&hash_values).map_err(std::io::Error::other)?;
-    fs::write(get_public_path(".post_hash.json"), json).await
-}
-
-pub(crate) async fn pre_hash_check(path: &PathBuf) -> std::io::Result<(bool, String)> {
+pub(crate) async fn pre_hash_check(path: &PathBuf) -> std::io::Result<Option<String>> {
     let file_text = fs::read_to_string(path).await?;
     let path_str = path.to_string_lossy().to_string();
     let mut context = digest::Context::new(&SHA256);
@@ -175,15 +136,14 @@ pub(crate) async fn pre_hash_check(path: &PathBuf) -> std::io::Result<(bool, Str
         .get(&path_str)
         .is_some_and(|saved| saved == &hash_value)
     {
-        return Ok((false, file_text));
+        return Ok(None);
     }
 
     let mut clone = (**post_hash).clone();
     clone.insert(path_str, hash_value);
-    persist_post_hash(&clone).await?;
     POST_HASH.store(Arc::new(clone));
 
-    Ok((true, file_text))
+    Ok(Some(file_text))
 }
 
 pub(crate) async fn dump_json() {

@@ -64,7 +64,8 @@ pub(crate) fn get_config_path() -> PathBuf {
 pub(crate) fn get_config_toml() -> Config {
     let config_path = get_config_path();
     if !config_path.exists() {
-        panic!("Configuration file not found at {}", config_path.display());
+        error!("Configuration file not found at {}", config_path.display());
+        panic!();
     }
     let config_content =
         fs::read_to_string(config_path).expect("Failed to read configuration file");
@@ -96,7 +97,7 @@ pub(crate) async fn watch_config(
         }
         match rx.try_recv() {
             Ok(Ok(events)) => {
-                let interesting = events.iter().any(|e| {
+                let update_flag = events.iter().any(|e| {
                     let event = &e.event;
                     match event.kind {
                         EventKind::Modify(_) => true,
@@ -110,7 +111,7 @@ pub(crate) async fn watch_config(
                         _ => false,
                     }
                 });
-                if interesting {
+                if update_flag {
                     let config = get_config_toml();
                     CONFIG.store(Arc::new(config));
                     info!("Config reloaded.")
@@ -174,13 +175,13 @@ impl ClassMap {
 }
 
 /// Get the path to the source dir (`./source`) in the current directory.
-pub(crate) fn get_source_path() -> PathBuf {
-    BASE_DIR.join("source")
+pub(crate) fn get_source_path<'a, S: Into<&'a str>>(name: S) -> PathBuf {
+    BASE_DIR.join("source").join(name.into())
 }
 
 pub(crate) fn extract_root_path(url: &str) -> String {
     if url.is_empty() {
-        return "".to_string();
+        return String::new();
     }
     if let Some(pos) = url.find("://")
         && let Some(path_pos) = url[pos + 3..].find('/')
@@ -192,9 +193,8 @@ pub(crate) fn extract_root_path(url: &str) -> String {
 
 /// Load files' [Metadata] of `./source` into `SITE`.
 pub(crate) fn get_site() -> Site {
-    let source_dir = get_source_path();
-    let post_dir = source_dir.join("post");
-    let page_dir = source_dir.join("page");
+    let post_dir = get_source_path("post");
+    let page_dir = get_source_path("page");
     let site = Site::new();
 
     let class_path = |c: &String, t: &'static str| -> String {
@@ -282,12 +282,11 @@ pub(crate) static SITE: LazyLock<ArcSwap<Site>> = LazyLock::new(|| {
 pub(crate) async fn watch_source(
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) -> Result<()> {
-    let source_path = get_source_path();
-
     // notify-debouncer-mini debounce window size: 1000ms
     let (tx, rx) = mpsc::channel();
     let mut debouncer = new_debouncer(Duration::from_millis(1000), None, tx)?;
-    debouncer.watch(&source_path, notify::RecursiveMode::Recursive)?;
+    debouncer.watch(get_source_path("page"), notify::RecursiveMode::Recursive)?;
+    debouncer.watch(get_source_path("post"), notify::RecursiveMode::Recursive)?;
 
     loop {
         if shutdown_rx.try_recv().is_ok() {
@@ -299,19 +298,15 @@ pub(crate) async fn watch_source(
                 for e in events {
                     let event = &e.event;
                     match event.kind {
-                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
-                        _ => {}
-                    };
-                    for p in &event.paths {
-                        if is_source_file(p) {
-                            let paths = &event.paths;
+                        EventKind::Create(_) | EventKind::Modify(_) => {
                             result_matcher!(
-                                render::render_to_file(paths).await,
+                                render::render_to_file(&event.paths).await,
                                 "Failed to render changed markdown to file"
                             );
                             update_flag = true;
                         }
-                    }
+                        _ => {}
+                    };
                 }
 
                 if update_flag {
@@ -373,7 +368,7 @@ pub(crate) async fn watch_layout(
         }
         match rx.try_recv() {
             Ok(Ok(events)) => {
-                let interesting = events.iter().any(|e| {
+                let update_flag = events.iter().any(|e| {
                     let event = &e.event;
                     match event.kind {
                         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
@@ -382,17 +377,12 @@ pub(crate) async fn watch_layout(
                     event.paths.iter().any(|p| is_source_file(p))
                 });
 
-                if interesting {
-                    let _ = tokio::task::spawn_blocking(|| {
-                        let tera = TERA.load();
-                        let mut clone = tera.as_ref().clone();
-                        result_matcher!(clone.full_reload(), "Failed to reload templates");
-                        TERA.store(Arc::new(clone));
-                        async {
-                            result_matcher!(render::render_all().await, "Failed to render posts");
-                        }
-                    })
-                    .await;
+                if update_flag {
+                    let tera = TERA.load();
+                    let mut clone = tera.as_ref().clone();
+                    result_matcher!(clone.full_reload(), "Failed to reload templates");
+                    TERA.store(Arc::new(clone));
+                    result_matcher!(render::render_all().await, "Failed to render posts");
                     info!("TERA reloaded.");
                 }
             }
@@ -428,7 +418,7 @@ pub(crate) async fn watch_helper(
         }
         match rx.try_recv() {
             Ok(Ok(events)) => {
-                let interesting = events.iter().any(|e| {
+                let update_flag = events.iter().any(|e| {
                     let event = &e.event;
                     match event.kind {
                         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
@@ -437,7 +427,7 @@ pub(crate) async fn watch_helper(
                     event.paths.iter().any(|p| is_source_file(p))
                 });
 
-                if interesting {
+                if update_flag {
                     let _ = helper::load_rhai_helpers(&helper_path);
                     info!("Helper reloaded.");
                 }
