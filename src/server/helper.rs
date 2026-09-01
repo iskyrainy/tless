@@ -1,5 +1,5 @@
 use arc_swap::ArcSwap;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use pulldown_cmark::{Event, HeadingLevel, Parser as MarkdownParser, Tag, TagEnd};
 use rhai::{AST, Dynamic, Engine, Map as RhaiMap};
 use sha2::{Digest, Sha256};
@@ -8,7 +8,6 @@ use std::{
     fmt::Write,
     fs,
     path::Path,
-    str::FromStr,
     sync::{Arc, LazyLock},
 };
 use tera::{Function, Map, Number, Result, Tera, Value, to_value};
@@ -16,7 +15,7 @@ use tracing::info;
 
 use crate::server::{CONFIG, SITE, TERA};
 
-pub trait CloneableFunction: Function + Send + Sync {
+trait CloneableFunction: Function + Send + Sync {
     fn clone_box(&self) -> Box<dyn CloneableFunction>;
 }
 
@@ -88,10 +87,43 @@ impl Helpers {
     }
 }
 
-pub(crate) static HELPER: LazyLock<ArcSwap<Helpers>> = LazyLock::new(|| {
+static HELPER: LazyLock<ArcSwap<Helpers>> = LazyLock::new(|| {
     let helpers = Helpers::new();
     ArcSwap::from_pointee(helpers)
 });
+
+/// Fallback amount for list helpers when no `amount` arg is given (effectively unlimited).
+const DEFAULT_AMOUNT: i64 = 1 << 16;
+
+/// Rhai engine safety limits for untrusted helper scripts.
+const MAX_OPERATIONS: u64 = 1_000_000;
+const MAX_EXPR_DEPTHS: (usize, usize) = (32, 64);
+const MAX_CALL_LEVELS: usize = 64;
+
+/// Parse a date string as RFC3339 or the `%Y-%m-%d %H:%M:%S` format used by the CLI.
+fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .ok()
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|dt| dt.and_utc())
+        })
+}
+
+fn is_absolute_url(path: &str) -> bool {
+    path.starts_with("http://") || path.starts_with("https://")
+}
+
+/// Join a relative path onto a base URL without duplicate slashes.
+fn join_url(base: &str, path: &str) -> String {
+    if path.starts_with('/') {
+        format!("{}{}", base.trim_end_matches('/'), path)
+    } else {
+        format!("{}/{}", base.trim_end_matches('/'), path)
+    }
+}
 
 macro_rules! match_value_or_default {
     ($name:expr, $pat:pat => $val:ident) => {
@@ -133,15 +165,14 @@ struct DateHelper;
 
 impl Function for DateHelper {
     fn call(&self, args: &HashMap<String, Value>) -> tera::Result<Value> {
-        let ts = args.get("ts");
-        let ts = match ts {
-            Some(ts) => match ts {
-                Value::Number(n) => n.as_i64().unwrap_or(Utc::now().timestamp()),
-                Value::String(s) => DateTime::parse_from_rfc3339(s.as_str())
-                    .unwrap_or(Utc::now().into())
-                    .timestamp(),
-                _ => return Err(tera::Error::msg("Missing 'path'")),
-            },
+        let ts = match args.get("ts") {
+            Some(Value::Number(n)) => n.as_i64().unwrap_or_else(|| Utc::now().timestamp()),
+            Some(Value::String(s)) => parse_datetime(s).unwrap_or_else(Utc::now).timestamp(),
+            Some(_) => {
+                return Err(tera::Error::msg(
+                    "Invalid 'ts': expected an epoch number or a date string",
+                ));
+            }
             None => Utc::now().timestamp(),
         };
 
@@ -153,9 +184,9 @@ impl Function for DateHelper {
 
 #[derive(Clone)]
 struct TagHelper {
-    pub tag: String,
-    pub default_attrs: HashMap<String, String>,
-    pub path_attr: String,
+    tag: String,
+    default_attrs: HashMap<String, String>,
+    path_attr: String,
 }
 
 impl Function for TagHelper {
@@ -180,7 +211,7 @@ impl Function for TagHelper {
                 for (k, v) in default_attrs {
                     html.push_str(&format!(r#" {}="{}""#, k, v));
                 }
-                html.push_str(&format!(r#" {}="{}">"#, path_attr, path));
+                html.push_str(&format!(r#" {}="{}">"#, path_attr, escape_html_attr(&path)));
                 return Ok(html);
             }
 
@@ -201,7 +232,7 @@ impl Function for TagHelper {
                     {
                         val = format!("/{}", v);
                     }
-                    html.push_str(&format!(r#" {}="{}""#, k, val.replace('"', "&quot;")));
+                    html.push_str(&format!(r#" {}="{}""#, k, escape_html_attr(&val)));
                 }
                 html.push('>');
                 return Ok(html);
@@ -265,18 +296,16 @@ define_tag_helper!(FaviconHelper, "link", "href", { "rel" => "icon" });
 define_tag_helper!(FeedHelper, "link", "href", { "rel" => "alternate", "type" => "application/rss+xml" });
 define_tag_helper!(MetaHelper, "meta", "content", { "name" => "generator" });
 
-#[macro_export]
 macro_rules! define_url_helper {
-    // Only root
     ($name:ident, url) => {
         #[derive(Clone)]
         struct $name;
         impl Function for $name {
             fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
                 let site_url = &CONFIG.load().site.url;
-                let root = super::extract_root_path(site_url);
                 let path = match_value_or_default!(args.get("path"), Value::String(v) => v);
-                let relative = match_value_or_default!(args.get("relative"), Value::Bool(v) => v, &true);
+                let relative =
+                    match_value_or_default!(args.get("relative"), Value::Bool(v) => v, &true);
                 let res = if *relative {
                     if path.starts_with('/') {
                         format!(".{}", path)
@@ -284,18 +313,13 @@ macro_rules! define_url_helper {
                         format!("./{}", path)
                     }
                 } else {
-                    if path.starts_with('/') {
-                        format!("{}{}", root.trim_end_matches('/'), path)
-                    } else {
-                        format!("{}/{}", root.trim_end_matches('/'), path)
-                    }
+                    join_url(&super::extract_root_path(site_url), path)
                 };
                 Ok(Value::String(res))
             }
         }
     };
 
-    // Full URL
     ($name:ident, fullurl) => {
         #[derive(Clone)]
         struct $name;
@@ -303,17 +327,11 @@ macro_rules! define_url_helper {
             fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
                 let site_url = &CONFIG.load().site.url;
                 let path = match_value_or_default!(args.get("path"), Value::String(v) => v);
-                let res = if path.starts_with('/') {
-                    format!("{}{}", site_url.trim_end_matches('/'), path)
-                } else {
-                    format!("{}/{}", site_url.trim_end_matches('/'), path)
-                };
-                Ok(Value::String(res))
+                Ok(Value::String(join_url(site_url, path)))
             }
         }
     };
 
-    // Gravatar
     ($name:ident, gravatar) => {
         #[derive(Clone)]
         struct $name;
@@ -352,7 +370,7 @@ impl Function for PartialHelper {
 
 #[derive(Clone)]
 struct ListHelper {
-    pub list: String,
+    list: String,
 }
 
 impl Function for ListHelper {
@@ -363,7 +381,12 @@ impl Function for ListHelper {
             match_value_or_default!(args.get("show_count"), Value::Bool(v) => v, &true);
         let list = match_value_or_default!(args.get("list"), Value::Bool(v) => v, &true);
         let separator = match_value_or_default!(args.get("separator"), Value::String(v) => v, &String::from(","));
-        let amount = match_value_or_default!(args.get("amount"), Value::Number(v) => v, 1 << 16, |v: &Number| v.as_i64().unwrap_or(1 << 16));
+        let amount = match_value_or_default!(
+            args.get("amount"),
+            Value::Number(v) => v,
+            DEFAULT_AMOUNT,
+            |v: &Number| v.as_i64().unwrap_or(DEFAULT_AMOUNT)
+        );
         let tag_class =
             match_value_or_default!(args.get("tag_class"), Value::Object(v) => v, &Map::new());
         let tag_class_ul = match_value_or_default!(tag_class.get("ul"), Value::String(v) => v, &String::from("ul"));
@@ -420,8 +443,8 @@ impl Function for ListHelper {
         };
 
         match self.list.as_str() {
-            "categorie" | "tag" => {
-                let data = if self.list == "categorie" {
+            "category" | "tag" => {
+                let data = if self.list == "category" {
                     site.categories.iter()
                 } else {
                     site.tags.iter()
@@ -460,8 +483,8 @@ impl Function for ListHelper {
                     site.pages.clone()
                 };
                 tmp.sort_by(|x, y| {
-                    let x_date = DateTime::from_str(&x.date).unwrap_or(Utc::now());
-                    let y_date = DateTime::from_str(&y.date).unwrap_or(Utc::now());
+                    let x_date = parse_datetime(&x.date).unwrap_or_else(Utc::now);
+                    let y_date = parse_datetime(&y.date).unwrap_or_else(Utc::now);
                     if order == -1 {
                         y_date.cmp(&x_date)
                     } else {
@@ -470,7 +493,10 @@ impl Function for ListHelper {
                 });
                 let mapped: Vec<_> = tmp
                     .into_iter()
-                    .map(|p| (p.title.clone(), p.title, 0))
+                    .map(|p| {
+                        let title = p.title;
+                        (title.clone(), title, 0)
+                    })
                     .collect();
 
                 if *list {
@@ -504,7 +530,7 @@ macro_rules! define_list_helper {
     };
 }
 
-define_list_helper!(CategoriesHelper, "categorie");
+define_list_helper!(CategoriesHelper, "category");
 define_list_helper!(TagsHelper, "tag");
 define_list_helper!(PostsHelper, "post");
 define_list_helper!(PagesHelper, "page");
@@ -639,27 +665,13 @@ impl Function for OpenGraphHelper {
             &config.site.description
         );
         let url = match args.get("url") {
-            Some(Value::String(path)) => {
-                if path.starts_with("http://") || path.starts_with("https://") {
-                    path.clone()
-                } else if path.starts_with('/') {
-                    format!("{}{}", config.site.url.trim_end_matches('/'), path)
-                } else {
-                    format!("{}/{}", config.site.url.trim_end_matches('/'), path)
-                }
-            }
+            Some(Value::String(path)) if is_absolute_url(path) => path.clone(),
+            Some(Value::String(path)) => join_url(&config.site.url, path),
             _ => config.site.url.clone(),
         };
         let image = match args.get("image") {
-            Some(Value::String(path)) => {
-                if path.starts_with("http://") || path.starts_with("https://") {
-                    path.clone()
-                } else if path.starts_with('/') {
-                    format!("{}{}", config.site.url.trim_end_matches('/'), path)
-                } else {
-                    format!("{}/{}", config.site.url.trim_end_matches('/'), path)
-                }
-            }
+            Some(Value::String(path)) if is_absolute_url(path) => path.clone(),
+            Some(Value::String(path)) => join_url(&config.site.url, path),
             _ => String::new(),
         };
         let kind = match_value_or_default!(
@@ -930,9 +942,9 @@ pub(crate) fn load_rhai_helpers(helpers_dir: impl AsRef<Path>) -> Result<()> {
     }
     let mut engine = Engine::new();
 
-    engine.set_max_operations(1_000_000);
-    engine.set_max_expr_depths(32, 64);
-    engine.set_max_call_levels(64);
+    engine.set_max_operations(MAX_OPERATIONS);
+    engine.set_max_expr_depths(MAX_EXPR_DEPTHS.0, MAX_EXPR_DEPTHS.1);
+    engine.set_max_call_levels(MAX_CALL_LEVELS);
     engine.set_max_variables(1);
     engine.set_allow_looping(false);
     engine.set_optimization_level(rhai::OptimizationLevel::Simple);

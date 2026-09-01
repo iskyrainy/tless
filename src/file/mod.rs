@@ -1,28 +1,23 @@
-//! Module for handling blog and page files, including adding, removing, and parsing metadata.
-//! It provides functions to manage blog posts and pages in a static site generator context.
+//! Blog/page file operations: add, remove, and parse frontmatter metadata.
 
 use std::{
-    env,
-    error::Error,
     fs,
     io::Read,
     path::{Path, PathBuf},
 };
 
+use anyhow::{Result, anyhow};
+use chrono::Utc;
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
+
+use crate::BASE_DIR;
 
 pub mod blog;
 pub mod page;
 
-/// Metadata structure to hold blog information.
-/// # Fields
-/// * `title` - The title of the blog.
-/// * `date` - The publication date of the blog.
-/// * `tags` - Optional tags associated with the blog.
-/// * `categories` - Optional categories associated with the blog.
-/// * `prva` - A boolean indicating if the blog is private.
-/// * `file` - The fd of the blog file, only used for [std::fs::File::read_to_string].
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// Metadata parsed from a source file's frontmatter.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Metadata {
     pub title: String,
     pub date: String,
@@ -35,80 +30,50 @@ pub struct Metadata {
 
 impl Metadata {
     pub fn new() -> Self {
-        Metadata {
-            title: String::new(),
-            date: String::new(),
-            layout: None,
-            tags: None,
-            categories: None,
-            prva: false,
-            path: PathBuf::new(),
-        }
+        Metadata::default()
     }
 }
 
-impl Default for Metadata {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Get the file path for a blog or page based on its name and class.
-/// # Arguments
-/// * `name` - A reference to a `String` representing the name of the blog or page.
-/// * `class` - A reference to a `String` representing the class (e.g., "post", "draft", "page").
-/// # Returns
-/// A `String` representing the full file path.
-/// # Examples
-/// ```
-/// let name = String::from("my_blog");
-/// let class = String::from("post");
-/// assert_eq!(get_path(&name, &class), "/current/directory/source/post/my_blog.md");
-/// ```
-pub(crate) fn get_path(name: &String, class: &String) -> String {
-    let current_dir = env::current_dir().expect("Failed to get current directory");
-    current_dir
+/// Path to a source file (`source/<class>/<name>.md`).
+pub(crate) fn get_path(name: &str, class: &str) -> PathBuf {
+    BASE_DIR
         .join("source")
         .join(class)
         .join(name)
         .with_extension("md")
-        .to_str()
-        .unwrap()
-        .to_string()
 }
 
-/// Check if a blog file exists at the given path.
-/// # Arguments
-/// * `file_path` - A reference to a `String` representing the file path to check.
-/// # Returns
-/// A `bool` indicating whether the file exists.
-/// # Examples
-/// ```
-/// let name = String::from("my_blog");
-/// let class = String::from("post");
-/// let exists = is_blog_exist(&name, &class);
-/// assert_eq!(exists, true);
-/// ```
-pub(crate) fn is_file_exist(file_path: &String) -> bool {
-    Path::new(file_path).exists()
+/// Check whether a file exists.
+pub(crate) fn is_file_exist(path: &Path) -> bool {
+    path.exists()
 }
 
-/// Parse the frontmatter and content from a blog file.
-/// # Arguments
-/// * `path` - A reference to a [std::path::PathBuf] representing the blog file.
-/// # Returns
-/// A `Result` containing `Metadata` if successful, or a boxed `dyn Error`.
-/// # Examples
-/// ```
-/// let file = fs::File::open("path/to/blog.md").unwrap();
-/// let metadata = parse_blog(file).unwrap();
-/// assert_eq!(metadata.title, "Blog Title");
-/// ```
-pub fn parse_file(path: PathBuf) -> Result<Metadata, Box<dyn Error>> {
+/// Current timestamp formatted in the configured `[site] zone`, falling back to UTC.
+pub(crate) fn current_timestamp() -> String {
+    const FMT: &str = "%Y-%m-%d %H:%M:%S";
+    configured_timezone()
+        .map(|tz| Utc::now().with_timezone(&tz).format(FMT).to_string())
+        .unwrap_or_else(|| Utc::now().format(FMT).to_string())
+}
+
+fn configured_timezone() -> Option<Tz> {
+    let config_text = fs::read_to_string(BASE_DIR.join("tless.toml")).ok()?;
+    let config: toml::Value = toml::from_str(&config_text).ok()?;
+    let zone = config
+        .get("site")
+        .and_then(|site| site.get("zone"))
+        .and_then(|zone| zone.as_str())
+        .map(str::trim)
+        .filter(|zone| !zone.is_empty())?;
+    zone.parse::<Tz>().ok()
+}
+
+/// Parse the frontmatter and file name of a source file into [Metadata].
+pub fn parse_file(path: PathBuf) -> Result<Metadata> {
     let mut file = fs::File::open(&path)?;
     let mut text = String::new();
     if file.read_to_string(&mut text).is_err() {
-        return Err("Failed to read blog.".into());
+        return Err(anyhow!("Failed to read blog."));
     }
     let (frontmatter, _) = frontmatter_gen::extract(&text)?;
     let mut metadata = Metadata::new();

@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
-    env, fs,
+    fs,
+    future::Future,
     path::{self, PathBuf},
     sync::{Arc, LazyLock},
     time::Duration,
@@ -16,15 +17,13 @@ use tokio::{join, select, sync::mpsc};
 use tracing::{error, info};
 
 use crate::{
+    BASE_DIR, error,
     file::{Metadata, parse_file},
-    result_matcher,
 };
 
-pub mod helper;
-pub mod render;
-pub mod run;
-
-pub(crate) static BASE_DIR: LazyLock<PathBuf> = LazyLock::new(|| env::current_dir().unwrap());
+mod helper;
+mod render;
+pub(crate) mod run;
 
 /// Configuration structure for the application.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -74,12 +73,9 @@ fn get_config_toml() -> Result<Config> {
 }
 
 /// Global static configuration accessible throughout the application.
-pub(crate) static CONFIG: LazyLock<ArcSwap<Config>> = LazyLock::new(|| {
-    if let Ok(config) = get_config_toml() {
-        ArcSwap::from_pointee(config)
-    } else {
-        panic!("Failed to load config")
-    }
+pub(crate) static CONFIG: LazyLock<ArcSwap<Config>> = LazyLock::new(|| match get_config_toml() {
+    Ok(config) => ArcSwap::from_pointee(config),
+    Err(e) => error::fatal(format!("{e:#}")),
 });
 
 enum ConfigWatchEvent {
@@ -197,22 +193,12 @@ impl Site {
 
 /// Store class info, class can be categories or tags.
 /// # Fields
-/// * `name` - Class name.
 /// * `path` - Class url, normally as the `/self.name`.
 /// * `posts` - List of posts that belong to this class.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct ClassMap {
     pub path: String,
     pub posts: Vec<Metadata>,
-}
-
-impl ClassMap {
-    pub fn new() -> Self {
-        ClassMap {
-            path: String::new(),
-            posts: vec![],
-        }
-    }
 }
 
 /// Get the path to the source dir (`./source`) in the current directory.
@@ -232,13 +218,13 @@ pub(crate) fn extract_root_path(url: &str) -> String {
     url.to_string()
 }
 
-/// Load files' [Metadata] of `./source` into `SITE`.
+/// Load [Metadata] of every source file into `SITE`, skipping unparseable files.
 fn get_site() -> Site {
     let post_dir = get_source_path("post");
     let page_dir = get_source_path("page");
     let site = Site::new();
 
-    let class_path = |c: &String, t: &'static str| -> String {
+    let class_path = |c: &str, t: &str| -> String {
         let config = CONFIG.load();
         format!(
             "{}/{}/{}",
@@ -249,47 +235,52 @@ fn get_site() -> Site {
     };
 
     let load = |mut site: Site, dirs: Vec<PathBuf>| -> Site {
-        dirs.iter().for_each(|dir| {
-            if let Ok(dir) = fs::read_dir(dir) {
-                for entry in dir {
-                    let entry = match entry {
-                        Ok(e) => e,
-                        Err(_) => continue,
-                    };
-                    let path = entry.path();
-                    if !is_source_file(&path) {
+        for dir in dirs {
+            let Ok(entries) = fs::read_dir(dir) else {
+                continue;
+            };
+            for entry in entries {
+                let Ok(entry) = entry else {
+                    continue;
+                };
+                let path = entry.path();
+                if !is_source_file(&path) {
+                    continue;
+                }
+                let metadata = match parse_file(path) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        error!("Failed to parse source file: {}", e);
                         continue;
                     }
-                    let metadata =
-                        result_matcher!(parse_file(PathBuf::from(&path)), "Failed to parse file");
-                    site.posts.push(metadata.clone());
-                    if let Some(categories) = metadata.categories.as_ref() {
-                        for c in categories {
-                            if let Some(map) = site.categories.get_mut(c) {
-                                map.posts.push(metadata.clone());
-                            } else {
-                                let mut new_map = ClassMap::new();
-                                new_map.path = class_path(c, "categories");
-                                new_map.posts.push(metadata.clone());
-                                site.categories.insert(c.to_string(), new_map);
-                            }
-                        }
+                };
+                site.posts.push(metadata.clone());
+                if let Some(categories) = metadata.categories.as_ref() {
+                    for c in categories {
+                        site.categories
+                            .entry(c.clone())
+                            .or_insert_with(|| ClassMap {
+                                path: class_path(c, "categories"),
+                                posts: vec![],
+                            })
+                            .posts
+                            .push(metadata.clone());
                     }
-                    if let Some(tags) = metadata.tags.as_ref() {
-                        for c in tags {
-                            if let Some(map) = site.tags.get_mut(c) {
-                                map.posts.push(metadata.clone());
-                            } else {
-                                let mut new_map = ClassMap::new();
-                                new_map.path = class_path(c, "tags");
-                                new_map.posts.push(metadata.clone());
-                                site.tags.insert(c.to_string(), new_map);
-                            }
-                        }
+                }
+                if let Some(tags) = metadata.tags.as_ref() {
+                    for c in tags {
+                        site.tags
+                            .entry(c.clone())
+                            .or_insert_with(|| ClassMap {
+                                path: class_path(c, "tags"),
+                                posts: vec![],
+                            })
+                            .posts
+                            .push(metadata.clone());
                     }
                 }
             }
-        });
+        }
         site
     };
 
@@ -321,7 +312,7 @@ pub(crate) static SITE: LazyLock<ArcSwap<Site>> = LazyLock::new(|| {
 });
 
 async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
-    // notify-debouncer-mini debounce window size: 1000ms
+    // notify-debouncer-full debounce window size: 1000ms
     let (tx, mut rx) = mpsc::channel(1000);
     let mut debouncer = new_debouncer(Duration::from_millis(1000), None, move |e| {
         let _ = tx.blocking_send(e);
@@ -341,10 +332,9 @@ async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
                     let event = &e.event;
                     match event.kind {
                         EventKind::Create(_) | EventKind::Modify(_) => {
-                            result_matcher!(
-                                render::render_to_file(&event.paths).await,
-                                "Failed to render changed markdown to file"
-                            );
+                            if let Err(err) = render::render_to_file(&event.paths).await {
+                                error!("Failed to render changed file: {}", err);
+                            }
                             update_flag = true;
                         }
                         _ => {}
@@ -372,30 +362,22 @@ pub(crate) fn get_layout_path() -> PathBuf {
     if dir.exists() {
         dir
     } else {
-        error!("Failed to init Tera");
-        std::process::exit(1)
+        error::fatal(format!("Theme directory not found: {}", dir.display()))
     }
 }
 
 pub(crate) static TERA: LazyLock<ArcSwap<Tera>> = LazyLock::new(|| {
     let layout_dir = get_layout_path();
-    let tera = result_matcher!(
-        Tera::new(&format!("{}/layout/*.html", layout_dir.to_string_lossy())),
-        err_handler = |e| {
-            error!("Parsing error(s): {}", e);
-            std::process::exit(1)
-        },
-        ok_handler = |tera| {
-            helper::Helpers::new().apply_to(tera);
-        }
-    );
+    let mut tera = Tera::new(&format!("{}/layout/*.html", layout_dir.to_string_lossy()))
+        .unwrap_or_else(|e| error::fatal(format!("Failed to load templates: {e}")));
+    helper::Helpers::new().apply_to(&mut tera);
     ArcSwap::from_pointee(tera)
 });
 
 async fn watch_layout(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
     let theme_path = get_layout_path();
 
-    // notify-debouncer-mini debounce window size: 1000ms
+    // notify-debouncer-full debounce window size: 1000ms
     let (tx, mut rx) = mpsc::channel(32);
     let mut debouncer = new_debouncer(
         Duration::from_millis(1000),
@@ -428,10 +410,17 @@ async fn watch_layout(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
             Some(()) = rx.recv() => {
                 let tera = TERA.load();
                 let mut clone = tera.as_ref().clone();
-                result_matcher!(clone.full_reload(), "Failed to reload templates");
-                TERA.store(Arc::new(clone));
-                result_matcher!(render::render_all().await, "Failed to render posts");
-                info!("TERA reloaded.");
+                match clone.full_reload() {
+                    Ok(()) => {
+                        TERA.store(Arc::new(clone));
+                        if let Err(e) = render::render_all().await {
+                            error!("Failed to render posts: {}", e);
+                        }
+                        info!("TERA reloaded.");
+                    }
+                    // Keep serving the previous templates on a failed reload
+                    Err(e) => error!("Failed to reload templates: {}", e),
+                }
             }
             else => {
                 info!("Layout watcher channel closed");
@@ -499,14 +488,21 @@ async fn watch_helper(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
     Ok(())
 }
 
+/// Run a watcher and log its failure instead of aborting the process.
+async fn watch_logged(name: &str, watch: impl Future<Output = Result<()>>) {
+    if let Err(e) = watch.await {
+        error!("{} watcher failed: {}", name, e);
+    }
+}
+
 /// Start watching.
 /// # Arguments
 /// * `shutdown_tx` - Subscribe the sender to recv a shutdown signal.
 pub(crate) async fn start_watch(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
     let _ = join! {
-        watch_config(shutdown_tx.subscribe()),
-        watch_source(shutdown_tx.subscribe()),
-        watch_layout(shutdown_tx.subscribe()),
-        watch_helper(shutdown_tx.subscribe()),
+        watch_logged("config", watch_config(shutdown_tx.subscribe())),
+        watch_logged("source", watch_source(shutdown_tx.subscribe())),
+        watch_logged("layout", watch_layout(shutdown_tx.subscribe())),
+        watch_logged("helper", watch_helper(shutdown_tx.subscribe())),
     };
 }

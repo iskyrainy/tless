@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     io::BufReader,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
 
@@ -34,7 +34,7 @@ pub(crate) fn render(markdown: &str) -> String {
     html_output
 }
 
-pub(crate) async fn render_to_file(events_path: &Vec<PathBuf>) -> std::io::Result<()> {
+pub(crate) async fn render_to_file(events_path: &[PathBuf]) -> std::io::Result<()> {
     let public_dir = Arc::new(get_public_path("."));
 
     let concurrency = num_cpus::get() + 1;
@@ -61,7 +61,10 @@ pub(crate) async fn render_to_file(events_path: &Vec<PathBuf>) -> std::io::Resul
 
                 let mut context = Context::new();
                 context.insert("content", &md_html_str);
-                match TERA.load().render("archive.html", &context) {
+                context.insert("title", &metadata.title);
+                context.insert("date", &metadata.date);
+                let layout = metadata.layout.as_deref().unwrap_or("archive.html");
+                match TERA.load().render(layout, &context) {
                     Ok(rendered) => {
                         writer.write_all(rendered.as_bytes()).await?;
                         writer.flush().await?;
@@ -102,28 +105,26 @@ pub(crate) async fn render_all() -> std::io::Result<()> {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub(crate) struct HashValue {
-    pub path: String,
-    pub hash_v: String,
+struct HashValue {
+    path: String,
+    hash: String,
 }
 
-pub(crate) static POST_HASH: LazyLock<ArcSwap<HashMap<String, String>>> = LazyLock::new(|| {
+static POST_HASH: LazyLock<ArcSwap<HashMap<String, String>>> = LazyLock::new(|| {
     let mut map = HashMap::new();
     let post_hash = get_public_path(".post_hash.json");
-    if !post_hash.exists() {
-        let _ = std::fs::File::create_new(post_hash).unwrap();
-    } else {
-        let file = std::fs::File::open(post_hash).unwrap();
+    // The cache file is regenerable: a missing or unreadable file just resets it
+    if let Ok(file) = std::fs::File::open(&post_hash) {
         let parsed: Vec<HashValue> =
             serde_json::from_reader(BufReader::new(file)).unwrap_or_default();
         for hash_value in parsed {
-            map.insert(hash_value.path, hash_value.hash_v);
+            map.insert(hash_value.path, hash_value.hash);
         }
     }
     ArcSwap::from_pointee(map)
 });
 
-pub(crate) async fn pre_hash_check(path: &PathBuf) -> std::io::Result<Option<String>> {
+pub(crate) async fn pre_hash_check(path: &Path) -> std::io::Result<Option<String>> {
     let file_text = fs::read_to_string(path).await?;
     let path_str = path.to_string_lossy().to_string();
     let mut context = digest::Context::new(&SHA256);

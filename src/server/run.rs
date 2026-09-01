@@ -1,26 +1,27 @@
 use std::path::PathBuf;
 
 use actix_web::{App, HttpResponse, HttpServer, Responder, get, web};
+use anyhow::{Context, Result};
 use tokio::{fs, select};
 use tracing::{info, warn};
 
 use crate::{
-    result_matcher,
-    server::{self, BASE_DIR, get_public_path, render},
+    BASE_DIR,
+    server::{self, get_public_path, render},
 };
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
-pub async fn run(port: u16) -> std::io::Result<()> {
-    // Start watching file change
+pub async fn run(port: u16) -> Result<()> {
     let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
 
     // Render all posts
-    result_matcher!(render::render_all().await, "Failed to render posts");
+    render::render_all()
+        .await
+        .context("Failed to render posts")?;
 
-    // Initialize the server
     let server = init_server(port, shutdown_tx.clone())?;
 
-    // Run the server
+    // Run file watchers and the HTTP server until one of them finishes
     select! {
         _ = server::start_watch(shutdown_tx) => {},
         _ = server => {},
@@ -31,7 +32,7 @@ pub async fn run(port: u16) -> std::io::Result<()> {
 fn init_server(
     port: u16,
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
-) -> Result<actix_web::dev::Server, std::io::Error> {
+) -> std::io::Result<actix_web::dev::Server> {
     let server = HttpServer::new(|| {
         App::new()
             .service(hi)
@@ -52,6 +53,11 @@ fn init_server(
     .bind(("0.0.0.0", port))?
     .run();
     Ok(server)
+}
+
+#[get("/")]
+async fn home() -> impl Responder {
+    get_static_file(String::from("index")).await
 }
 
 #[get("/hi")]

@@ -1,11 +1,12 @@
-use std::{env, process};
+use std::env;
 
+use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use tracing::{error, info};
+use tracing::info;
 
 use crate::{
+    error::AppError,
     file::{blog, page},
-    result_matcher,
     server::run,
     site,
 };
@@ -14,18 +15,18 @@ use crate::{
 #[derive(Parser, Debug)]
 #[command(
     author = "gdhvxcj <wangnan5117@gmail.com>",
-    version = "0.1.0",
+    version,
     about = "Build blog site.",
     long_about = "Fast and easy blog site builder."
 )]
 #[command(propagate_version = true)]
-pub struct Command {
+struct Command {
     #[command(subcommand)]
-    pub cmd: Commands,
+    cmd: Commands,
 }
 
 #[derive(Subcommand, Debug)]
-pub enum Commands {
+enum Commands {
     /// Subcommand that run tless server and specify port
     Server(Server),
 
@@ -40,7 +41,7 @@ pub enum Commands {
 }
 
 #[derive(Args, Debug)]
-pub struct Server {
+struct Server {
     /// Run Tless server.
     ///
     /// usage:
@@ -61,13 +62,13 @@ pub struct Server {
 }
 
 #[derive(Args, Debug)]
-pub struct Blog {
+struct Blog {
     #[command(subcommand)]
-    pub cli: BlogArgs,
+    cli: BlogArgs,
 }
 
 #[derive(Subcommand, Debug, Clone)]
-pub enum BlogArgs {
+enum BlogArgs {
     /// Add a draft blog.
     /// If file exists, print failed.
     ///
@@ -107,13 +108,13 @@ pub enum BlogArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct Page {
+struct Page {
     #[command(subcommand)]
-    pub cli: PageArgs,
+    cli: PageArgs,
 }
 
 #[derive(Subcommand, Debug, Clone)]
-pub enum PageArgs {
+enum PageArgs {
     /// Add a page named `name`.
     /// If page exists, print failed.
     ///
@@ -137,7 +138,7 @@ pub enum PageArgs {
 
 #[derive(Args, Debug)]
 #[group(required = true, multiple = false)]
-pub struct Site {
+struct Site {
     /// Initialize site structure.
     ///
     /// usage:
@@ -175,73 +176,61 @@ pub struct Site {
     backup: bool,
 }
 
-/// Parse command line arguments and check the validity.
-pub fn parse_cmd() {
-    let input = Command::parse();
+/// Parse command line arguments and run the selected subcommand.
+pub fn parse_cmd() -> Result<(), AppError> {
+    let input = Command::try_parse().map_err(|e| AppError::usage(e.to_string()))?;
     match input.cmd {
-        Commands::Server(server) => handle_server(server),
-        Commands::Blog(blog) => handle_blog(blog),
-        Commands::Page(page) => handle_page(page),
-        Commands::Site(site) => handle_site(site),
+        Commands::Server(server) => handle_server(server).map_err(AppError::from),
+        Commands::Blog(blog) => handle_blog(blog).map_err(AppError::from),
+        Commands::Page(page) => handle_page(page).map_err(AppError::from),
+        Commands::Site(site) => handle_site(site).map_err(AppError::from),
     }
 }
 
-fn handle_server(server: Server) {
-    let current_dir = match env::current_dir() {
-        Ok(dir) => dir,
-        Err(_) => {
-            error!("Can not get current dir");
-            process::exit(1);
-        }
-    };
+fn handle_server(server: Server) -> Result<()> {
+    let current_dir = env::current_dir().context("Cannot get current directory")?;
     if !current_dir.join("tless.toml").exists() {
-        error!("Can't find configure file in current dir.");
-        process::exit(1);
+        bail!("tless.toml not found in current directory");
     }
-    // check config file
-    if server.run && server.port > 1024 && server.port < 65_535 {
-        result_matcher!(run::run(server.port), "Failed to start server");
+    if server.run && (1025..=65534).contains(&server.port) {
+        run::run(server.port).context("Failed to start server")?;
     } else {
-        error!(
-            "Server not started. Use -r to run the server. Port must be between 1025 and 65534."
-        );
-        process::exit(1);
+        bail!("Server not started. Use -r to run the server. Port must be between 1025 and 65534.");
     }
+    Ok(())
 }
 
-fn handle_blog(blog: Blog) {
+fn handle_blog(blog: Blog) -> Result<()> {
     match &blog.cli {
-        BlogArgs::Add { name } => result_matcher!(blog::add_blog(name), "Failed to add blog"),
+        BlogArgs::Add { name } => blog::add_blog(name).context("Failed to add blog"),
         BlogArgs::Remove { class, name } => {
-            result_matcher!(blog::remove_blog(name, class), "Failed to remove blog")
+            blog::remove_blog(name, class).context("Failed to remove blog")
         }
-        BlogArgs::Publish { name } => {
-            result_matcher!(blog::publish_blog(name), "Failed to publish blog")
-        }
+        BlogArgs::Publish { name } => blog::publish_blog(name).context("Failed to publish blog"),
     }
 }
 
-fn handle_page(page: Page) {
+fn handle_page(page: Page) -> Result<()> {
     match &page.cli {
-        PageArgs::Add { name } => result_matcher!(page::add_page(name), "Failed to add page"),
-        PageArgs::Remove { name } => {
-            result_matcher!(page::remove_page(name), "Failed to remove page")
-        }
+        PageArgs::Add { name } => page::add_page(name).context("Failed to add page"),
+        PageArgs::Remove { name } => page::remove_page(name).context("Failed to remove page"),
     }
 }
 
-fn handle_site(site: Site) {
+fn handle_site(site: Site) -> Result<()> {
     if site.init {
         info!("Initializing site structure...");
-        result_matcher!(site::init(), "Failed to initialize site structure");
+        site::init().context("Failed to initialize site structure")
     } else if site.generate {
         info!("Generating static pages...");
+        Ok(())
     } else if site.deploy {
         info!("Deploying site to GitHub Pages...");
+        Ok(())
     } else if site.backup {
         info!("Backing up site data...");
+        Ok(())
     } else {
-        error!("No valid site operation specified.");
-        process::exit(1);
+        bail!("No valid site operation specified");
     }
 }
