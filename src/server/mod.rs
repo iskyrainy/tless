@@ -2,17 +2,17 @@ use std::{
     collections::HashMap,
     env, fs,
     path::{self, PathBuf},
-    sync::{Arc, LazyLock, mpsc},
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use arc_swap::ArcSwap;
 use notify::EventKind;
-use notify_debouncer_full::new_debouncer;
+use notify_debouncer_full::{DebouncedEvent, new_debouncer};
 use serde::{Deserialize, Serialize};
 use tera::Tera;
-use tokio::select;
+use tokio::{join, select, sync::mpsc};
 use tracing::{error, info};
 
 use crate::{
@@ -56,76 +56,117 @@ pub(crate) struct Menu {
 }
 
 /// Get the path to the configuration file (`tless.toml`) in the current directory.
-pub(crate) fn get_config_path() -> PathBuf {
+fn get_config_path() -> PathBuf {
     BASE_DIR.join("tless.toml")
 }
 
 /// Load `tless.toml` to `CONFIG`.
-pub(crate) fn get_config_toml() -> Config {
+fn get_config_toml() -> Result<Config> {
     let config_path = get_config_path();
     if !config_path.exists() {
-        error!("Configuration file not found at {}", config_path.display());
-        panic!();
+        return Err(anyhow!(
+            "Configuration file not found at {}",
+            config_path.display()
+        ));
     }
-    let config_content =
-        fs::read_to_string(config_path).expect("Failed to read configuration file");
-    toml::from_str(&config_content).expect("Failed to parse configuration file")
+    let config_content = fs::read_to_string(config_path)?;
+    Ok(toml::from_str(&config_content)?)
 }
 
 /// Global static configuration accessible throughout the application.
 pub(crate) static CONFIG: LazyLock<ArcSwap<Config>> = LazyLock::new(|| {
-    let config = get_config_toml();
-    ArcSwap::from_pointee(config)
+    if let Ok(config) = get_config_toml() {
+        ArcSwap::from_pointee(config)
+    } else {
+        panic!("Failed to load config")
+    }
 });
+
+enum ConfigWatchEvent {
+    Rewatch,
+    Reload,
+}
 
 /// Watch the configuration file for changes and update the global `CONFIG` accordingly.
 /// # Arguments
 /// * `shutdown_rx` - A receiver to listen for shutdown signals.
-pub(crate) async fn watch_config(
-    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-) -> Result<()> {
+async fn watch_config(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
     let config_path = get_config_path();
+    let (tx, mut rx) = mpsc::channel(32);
+    let mut debouncer = new_debouncer(
+        Duration::from_millis(1000),
+        None,
+        move |result: Result<Vec<DebouncedEvent>, Vec<_>>| match result {
+            Ok(events) => {
+                let mut reload = false;
+                let mut rewatch = false;
+                for event in events {
+                    match event.event.kind {
+                        EventKind::Modify(_) => {
+                            reload = true;
+                        }
+                        EventKind::Create(_) => {
+                            reload = true;
+                            rewatch = true;
+                        }
+                        EventKind::Remove(_) => {
+                            rewatch = true;
+                        }
+                        _ => {}
+                    }
+                }
 
-    // notify-debouncer-mini debounce window size: 1000ms
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut debouncer = new_debouncer(Duration::from_millis(1000), None, tx)?;
+                let event = if rewatch {
+                    Some(ConfigWatchEvent::Rewatch)
+                } else if reload {
+                    Some(ConfigWatchEvent::Reload)
+                } else {
+                    None
+                };
+                if let Some(event) = event
+                    && let Err(e) = tx.try_send(event)
+                {
+                    error!("Failed to send config event: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("Config watcher error: {:?}", e);
+            }
+        },
+    )?;
+
     debouncer.watch(&config_path, notify::RecursiveMode::NonRecursive)?;
 
     loop {
-        if shutdown_rx.try_recv().is_ok() {
-            break;
-        }
-        match rx.try_recv() {
-            Ok(Ok(events)) => {
-                let update_flag = events.iter().any(|e| {
-                    let event = &e.event;
-                    match event.kind {
-                        EventKind::Modify(_) => true,
-                        EventKind::Create(_) | EventKind::Remove(_) => {
-                            result_matcher!(
-                                debouncer.watch(&config_path, notify::RecursiveMode::NonRecursive),
-                                "Config file watch error"
-                            );
-                            true
-                        }
-                        _ => false,
+        tokio::select! {
+            _ = shutdown_rx.recv() => {
+                info!("Config watcher received shutdown signal");
+                break;
+            }
+            Some(event) = rx.recv() => {
+                let config = match get_config_toml() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!("Failed to load config: {}", e);
+                        continue;
                     }
-                });
-                if update_flag {
-                    let config = get_config_toml();
-                    CONFIG.store(Arc::new(config));
-                    info!("Config reloaded.")
-                }
+                };
+                CONFIG.store(Arc::new(config));
+                if let ConfigWatchEvent::Rewatch = event
+                    && config_path.exists() && let Err(e) = debouncer.watch(
+                        &config_path,
+                        notify::RecursiveMode::NonRecursive,
+                    ) {
+                        error!("Config file rewatch error: {}", e);
+                    }
             }
-            Err(mpsc::TryRecvError::Empty) => {
-                // idle, sleep for 250ms
-                tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-            }
-            _ => {
-                error!("Failed to receive config file change event.");
+            else => {
+                info!("Config watcher channel closed");
+                break;
             }
         }
     }
+
     Ok(())
 }
 
@@ -192,7 +233,7 @@ pub(crate) fn extract_root_path(url: &str) -> String {
 }
 
 /// Load files' [Metadata] of `./source` into `SITE`.
-pub(crate) fn get_site() -> Site {
+fn get_site() -> Site {
     let post_dir = get_source_path("post");
     let page_dir = get_source_path("page");
     let site = Site::new();
@@ -279,21 +320,22 @@ pub(crate) static SITE: LazyLock<ArcSwap<Site>> = LazyLock::new(|| {
     ArcSwap::from_pointee(site)
 });
 
-pub(crate) async fn watch_source(
-    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-) -> Result<()> {
+async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
     // notify-debouncer-mini debounce window size: 1000ms
-    let (tx, rx) = mpsc::channel();
-    let mut debouncer = new_debouncer(Duration::from_millis(1000), None, tx)?;
+    let (tx, mut rx) = mpsc::channel(1000);
+    let mut debouncer = new_debouncer(Duration::from_millis(1000), None, move |e| {
+        let _ = tx.blocking_send(e);
+    })?;
     debouncer.watch(get_source_path("page"), notify::RecursiveMode::Recursive)?;
     debouncer.watch(get_source_path("post"), notify::RecursiveMode::Recursive)?;
 
     loop {
-        if shutdown_rx.try_recv().is_ok() {
-            break;
-        }
-        match rx.try_recv() {
-            Ok(Ok(events)) => {
+        select! {
+            _ = shutdown_rx.recv() => {
+                info!("Source watcher received shutdown signal");
+                break;
+            },
+            Some(Ok(events)) = rx.recv() => {
                 let mut update_flag = false;
                 for e in events {
                     let event = &e.event;
@@ -315,15 +357,13 @@ pub(crate) async fn watch_source(
                     info!("Site global info reloaded.");
                 }
             }
-            Err(mpsc::TryRecvError::Empty) => {
-                // idle, sleep for 250ms
-                tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-            }
-            _ => {
-                error!("Failed to receive source file change event.");
+            else => {
+                info!("Helper watcher channel closed");
+                break;
             }
         }
     }
+
     Ok(())
 }
 
@@ -352,49 +392,54 @@ pub(crate) static TERA: LazyLock<ArcSwap<Tera>> = LazyLock::new(|| {
     ArcSwap::from_pointee(tera)
 });
 
-pub(crate) async fn watch_layout(
-    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-) -> Result<()> {
+async fn watch_layout(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
     let theme_path = get_layout_path();
 
     // notify-debouncer-mini debounce window size: 1000ms
-    let (tx, rx) = mpsc::channel();
-    let mut debouncer = new_debouncer(Duration::from_millis(1000), None, tx)?;
+    let (tx, mut rx) = mpsc::channel(32);
+    let mut debouncer = new_debouncer(
+        Duration::from_millis(1000),
+        None,
+        move |result: Result<Vec<DebouncedEvent>, Vec<_>>| match result {
+            Ok(events) => {
+                if events.iter().any(|event| {
+                    matches!(
+                        event.event.kind,
+                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                    )
+                }) && let Err(e) = tx.try_send(())
+                {
+                    error!("Failed to send layout reload event: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("Layout watcher error: {:?}", e);
+            }
+        },
+    )?;
     debouncer.watch(&theme_path, notify::RecursiveMode::Recursive)?;
 
     loop {
-        if shutdown_rx.try_recv().is_ok() {
-            break;
-        }
-        match rx.try_recv() {
-            Ok(Ok(events)) => {
-                let update_flag = events.iter().any(|e| {
-                    let event = &e.event;
-                    match event.kind {
-                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
-                        _ => return false,
-                    };
-                    event.paths.iter().any(|p| is_source_file(p))
-                });
-
-                if update_flag {
-                    let tera = TERA.load();
-                    let mut clone = tera.as_ref().clone();
-                    result_matcher!(clone.full_reload(), "Failed to reload templates");
-                    TERA.store(Arc::new(clone));
-                    result_matcher!(render::render_all().await, "Failed to render posts");
-                    info!("TERA reloaded.");
-                }
+        tokio::select! {
+            _ = shutdown_rx.recv() => {
+                info!("Layout watcher received shutdown signal");
+                break;
             }
-            Err(mpsc::TryRecvError::Empty) => {
-                // idle, sleep for 250ms
-                tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+            Some(()) = rx.recv() => {
+                let tera = TERA.load();
+                let mut clone = tera.as_ref().clone();
+                result_matcher!(clone.full_reload(), "Failed to reload templates");
+                TERA.store(Arc::new(clone));
+                result_matcher!(render::render_all().await, "Failed to render posts");
+                info!("TERA reloaded.");
             }
-            _ => {
-                error!("Failed to receive layout file change event.");
+            else => {
+                info!("Layout watcher channel closed");
+                break;
             }
         }
     }
+
     Ok(())
 }
 
@@ -402,45 +447,55 @@ pub(crate) fn get_public_path<'a, S: Into<&'a str>>(name: S) -> PathBuf {
     BASE_DIR.join("public").join(name.into())
 }
 
-pub(crate) async fn watch_helper(
-    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-) -> Result<()> {
+async fn watch_helper(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
     let helper_path = BASE_DIR.join("helper");
 
-    // notify-debouncer-mini debounce window size: 1000ms
-    let (tx, rx) = mpsc::channel();
-    let mut debouncer = new_debouncer(Duration::from_millis(1000), None, tx)?;
+    let (tx, mut rx) = mpsc::channel(32);
+    let mut debouncer = new_debouncer(
+        Duration::from_millis(1000),
+        None,
+        move |result: Result<Vec<DebouncedEvent>, Vec<_>>| match result {
+            Ok(events) => {
+                if events.iter().any(|event| {
+                    matches!(
+                        event.event.kind,
+                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                    ) && event.event.paths.iter().any(|path| is_source_file(path))
+                }) && let Err(e) = tx.try_send(())
+                {
+                    error!("Failed to send helper reload event: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("Helper watcher error: {:?}", e);
+            }
+        },
+    )?;
     debouncer.watch(&helper_path, notify::RecursiveMode::Recursive)?;
 
     loop {
-        if shutdown_rx.try_recv().is_ok() {
-            break;
-        }
-        match rx.try_recv() {
-            Ok(Ok(events)) => {
-                let update_flag = events.iter().any(|e| {
-                    let event = &e.event;
-                    match event.kind {
-                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
-                        _ => return false,
-                    };
-                    event.paths.iter().any(|p| is_source_file(p))
-                });
-
-                if update_flag {
-                    let _ = helper::load_rhai_helpers(&helper_path);
-                    info!("Helper reloaded.");
+        tokio::select! {
+            _ = shutdown_rx.recv() => {
+                info!("Helper watcher received shutdown signal");
+                break;
+            }
+            Some(()) = rx.recv() => {
+                match helper::load_rhai_helpers(&helper_path) {
+                    Ok(_) => {
+                        info!("Helper reloaded.");
+                    }
+                    Err(e) => {
+                        error!("Failed to reload helper: {}", e);
+                    }
                 }
             }
-            Err(mpsc::TryRecvError::Empty) => {
-                // idle, sleep for 250ms
-                tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-            }
-            _ => {
-                error!("Failed to receive helper dir change event.");
+            else => {
+                info!("Helper watcher channel closed");
+                break;
             }
         }
     }
+
     Ok(())
 }
 
@@ -448,10 +503,10 @@ pub(crate) async fn watch_helper(
 /// # Arguments
 /// * `shutdown_tx` - Subscribe the sender to recv a shutdown signal.
 pub(crate) async fn start_watch(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
-    select! {
-        _ = watch_config(shutdown_tx.subscribe()) => {},
-        _ = watch_source(shutdown_tx.subscribe()) => {},
-        _ = watch_layout(shutdown_tx.subscribe()) => {},
-        _ = watch_helper(shutdown_tx.subscribe()) => {},
-    }
+    let _ = join! {
+        watch_config(shutdown_tx.subscribe()),
+        watch_source(shutdown_tx.subscribe()),
+        watch_layout(shutdown_tx.subscribe()),
+        watch_helper(shutdown_tx.subscribe()),
+    };
 }
