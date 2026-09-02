@@ -19,7 +19,6 @@ use tracing::{error, info};
 use crate::{
     BASE_DIR, error,
     file::{Metadata, parse_file},
-    server::helper::HELPER,
 };
 
 mod helper;
@@ -369,9 +368,14 @@ pub(crate) fn get_layout_path() -> PathBuf {
 
 pub(crate) static TERA: LazyLock<ArcSwap<Tera>> = LazyLock::new(|| {
     let layout_dir = get_layout_path();
+    let glob = format!("{}/layout/*.html", layout_dir.to_string_lossy());
     let mut tera = Tera::new();
-    tera.load_from_glob(&format!("{}/layout/*.html", layout_dir.to_string_lossy()));
-    HELPER.load().apply_to(&mut tera);
+    helper::register_helpers(&mut tera);
+    let rhai_helpers = helper::compile_rhai_helpers(BASE_DIR.join("helper"))
+        .unwrap_or_else(|e| error::fatal(format!("Failed to load helpers: {e}")));
+    helper::register_rhai_helpers(&mut tera, rhai_helpers);
+    tera.load_from_glob(&glob)
+        .unwrap_or_else(|e| error::fatal(format!("Failed to load templates: {e}")));
     ArcSwap::from_pointee(tera)
 });
 
@@ -478,9 +482,6 @@ async fn watch_helper(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
                         error!("Failed to reload helper: {}", e);
                     }
                 }
-                let mut tera = TERA.load().as_ref().clone();
-                HELPER.load().apply_to(&mut tera);
-                TERA.store(Arc::new(tera));
             }
             else => {
                 info!("Helper watcher channel closed");

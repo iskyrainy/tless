@@ -54,6 +54,12 @@ pub(crate) async fn render_to_file(events_path: &[PathBuf]) -> std::io::Result<(
                     None => return Ok(()),
                 };
 
+                // The file parsed successfully above, so extracting the body
+                // cannot fail here; fall back to the raw text otherwise
+                let md_body = frontmatter_gen::extract(&file_str)
+                    .map(|(_, body)| body.to_string())
+                    .unwrap_or_else(|_| file_str.clone());
+
                 let md_html_str = render(&file_str);
                 let file_path = public_dir.join(&metadata.title);
                 let file = File::create(&file_path).await?;
@@ -61,6 +67,7 @@ pub(crate) async fn render_to_file(events_path: &[PathBuf]) -> std::io::Result<(
 
                 let mut context = Context::new();
                 context.insert("content", &md_html_str);
+                context.insert("markdown", &md_body);
                 context.insert("title", &metadata.title);
                 context.insert("date", &metadata.date);
                 let layout = metadata.layout.as_deref().unwrap_or("archive.html");

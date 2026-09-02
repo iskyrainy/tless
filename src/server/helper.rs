@@ -1,104 +1,34 @@
-use arc_swap::ArcSwap;
+//! Built-in Tera template functions and Rhai helper loading.
+
+use std::{fmt::Write, fs, path::Path, sync::Arc};
+
 use chrono::{DateTime, NaiveDateTime, Utc};
+use data_encoding::HEXUPPER;
 use pulldown_cmark::{Event, HeadingLevel, Parser as MarkdownParser, Tag, TagEnd};
 use rhai::{AST, Dynamic, Engine, Map as RhaiMap};
 use sha2::{Digest, Sha256};
-use std::{
-    collections::HashMap,
-    fmt::Write,
-    fs,
-    path::Path,
-    sync::{Arc, LazyLock},
-};
-use tera::{Context, Function, Kwargs, Map, Number, State, Tera, TeraResult, Value};
+use tera::{Context, Error, Kwargs, Map, State, Tera, TeraResult, Value};
 use tracing::info;
 
-use crate::server::{CONFIG, SITE, TERA};
+use crate::server::{CONFIG, SITE, TERA, extract_root_path};
 
-trait CloneableFunction: Function<TeraResult<Value>> + Send + Sync {
-    fn clone_box(&self) -> Box<dyn CloneableFunction>;
+/// Register all built-in template functions on `tera`.
+pub(crate) fn register_helpers(tera: &mut Tera) {
+    tera.register_function("date", date_helper);
+    tera.register_function("url_for", url_helper);
+    tera.register_function("full_url_for", full_url_helper);
+    tera.register_function("gravatar", gravatar_helper);
+    tera.register_function("partial", partial_helper);
+    tera.register_function("paginator", paginator_helper);
+    tera.register_function("number_format", number_format_helper);
+    tera.register_function("open_graph", open_graph_helper);
+    tera.register_function("toc", toc_helper);
+    register_tag_helpers(tera);
+    register_list_helpers(tera);
 }
-
-impl<T> CloneableFunction for T
-where
-    T: 'static + Function<TeraResult<Value>> + Send + Sync + Clone,
-{
-    fn clone_box(&self) -> Box<dyn CloneableFunction> {
-        Box::new(self.clone())
-    }
-}
-
-type HelperFunc = Box<dyn CloneableFunction>;
-
-impl Clone for HelperFunc {
-    fn clone(&self) -> Self {
-        self.clone_box()
-    }
-}
-
-#[derive(Default, Clone)]
-pub struct Helpers {
-    funcs: HashMap<String, HelperFunc>,
-}
-
-impl Helpers {
-    pub fn new() -> Self {
-        let mut helper = Self {
-            funcs: HashMap::new(),
-        };
-        helper.register("date", DateHelper);
-        helper.register("url_for", UrlHelper);
-        helper.register("full_url_for", FullUrlHelper);
-        helper.register("gravatar", GravatarHelper);
-        helper.register("css", CssHelper);
-        helper.register("js", JsHelper);
-        helper.register("link", LinkHelper);
-        helper.register("mail", MailHelper);
-        helper.register("image", ImageHelper);
-        helper.register("favicon", FaviconHelper);
-        helper.register("feed", FeedHelper);
-        helper.register("meta", MetaHelper);
-        helper.register("partial", PartialHelper);
-        helper.register("list_categories", CategoriesHelper);
-        helper.register("list_tags", TagsHelper);
-        helper.register("list_posts", PostsHelper);
-        helper.register("list_pages", PagesHelper);
-        helper.register("paginator", PaginatorHelper);
-        helper.register("number_format", NumberFormatHelper);
-        helper.register("open_graph", OpenGraphHelper);
-        helper.register("toc", TocHelper);
-        helper
-    }
-
-    pub fn register<F>(&mut self, name: &str, f: F)
-    where
-        F: Function<TeraResult<Value>> + Send + Sync + Clone + 'static,
-    {
-        self.funcs.insert(name.to_string(), Box::new(f));
-    }
-
-    pub fn apply_to(&self, tera: &mut Tera) {
-        for (name, func) in &self.funcs {
-            let f_clone = func.clone();
-            tera.register_function(name, move |args, state: &State| -> TeraResult<Value> {
-                f_clone.call(args, state)
-            });
-        }
-    }
-}
-
-pub(crate) static HELPER: LazyLock<ArcSwap<Helpers>> = LazyLock::new(|| {
-    let helpers = Helpers::new();
-    ArcSwap::from_pointee(helpers)
-});
 
 /// Fallback amount for list helpers when no `amount` arg is given (effectively unlimited).
-const DEFAULT_AMOUNT: i64 = 1 << 16;
-
-/// Rhai engine safety limits for untrusted helper scripts.
-const MAX_OPERATIONS: u64 = 1_000_000;
-const MAX_EXPR_DEPTHS: (usize, usize) = (32, 64);
-const MAX_CALL_LEVELS: usize = 64;
+const DEFAULT_AMOUNT: usize = 1 << 16;
 
 /// Parse a date string as RFC3339 or the `%Y-%m-%d %H:%M:%S` format used by the CLI.
 fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
@@ -125,650 +55,532 @@ fn join_url(base: &str, path: &str) -> String {
     }
 }
 
-macro_rules! match_value_or_default {
-    ($name:expr, $pat:pat => $val:ident) => {
-        match $name {
-            Some(arg) => match arg {
-                $pat => $val,
-                _ => {
-                    return Err(tera::Error::msg(format!(
-                        "Param type error: expect pattern `{}` but got value `{:?}`",
-                        stringify!($pat),
-                        arg
-                    )))
-                }
-            },
-            None => {
-                return Err(tera::Error::msg(format!(
-                    "Param not found: `{}`",
-                    stringify!($name)
-                )))
-            }
-        }
-    };
-    ($name:expr, $pat:pat => $val:ident, $default_value:expr) => {
-        match $name {
-            Some($pat) => $val,
-            _ => $default_value,
-        }
-    };
-    ($name:expr, $pat:pat => $val:ident, $default_value:expr, $and_then:expr) => {
-        match $name {
-            Some($pat) => $and_then($val),
-            _ => $default_value,
-        }
-    };
-}
-
-#[derive(Clone)]
-struct DateHelper;
-
-impl Function<TeraResult<Value>> for DateHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-        let ts = match args.get("ts") {
-            Some(Value::Number(n)) => n.as_i64().unwrap_or_else(|| Utc::now().timestamp()),
-            Some(Value::String(s)) => parse_datetime(s).unwrap_or_else(Utc::now).timestamp(),
-            Some(_) => {
-                return Err(tera::Error::msg(
+fn date_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
+    let ts = match kwargs.get::<Value>("ts")? {
+        Some(ts) => {
+            if let Some(ts) = ts.as_i64() {
+                ts
+            } else if let Some(ts) = ts.as_f64() {
+                ts as i64
+            } else if let Some(s) = ts.as_str() {
+                parse_datetime(s).unwrap_or_else(Utc::now).timestamp()
+            } else {
+                return Err(Error::message(
                     "Invalid 'ts': expected an epoch number or a date string",
                 ));
             }
-            None => Utc::now().timestamp(),
-        };
-
-        let fmt = match_value_or_default!(args.get("fmt"), Value::String(v) => v, &String::from("%Y-%m-%d %H:%M:%S"));
-        let date = DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now);
-        Ok(to_value(date.format(fmt).to_string())?)
-    }
-}
-
-#[derive(Clone)]
-struct TagHelper {
-    tag: String,
-    default_attrs: HashMap<String, String>,
-    path_attr: String,
-}
-
-impl TagHelper {
-    fn new(tag: &str, path_attr: &str, defaults: &[(&str, &str)]) -> Self {
-        TagHelper {
-            tag: tag.to_string(),
-            path_attr: path_attr.to_string(),
-            default_attrs: defaults
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
         }
-    }
-}
-
-impl Function<TeraResult<Value>> for TagHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-        fn build_tag(
-            tag: &str,
-            default_attrs: &HashMap<String, String>,
-            path_attr: &str,
-            val: &Value,
-        ) -> TeraResult<String> {
-            let mut html = String::new();
-            if let Some(s) = val.as_str() {
-                let mut path = s.to_string();
-                if !path.starts_with('/')
-                    && !path.starts_with("http")
-                    && !path.starts_with("mailto:")
-                {
-                    path = format!("/{}", path);
-                }
-
-                html.push_str(&format!("<{}", tag));
-                for (k, v) in default_attrs {
-                    html.push_str(&format!(r#" {}="{}""#, k, v));
-                }
-                html.push_str(&format!(r#" {}="{}">"#, path_attr, escape_html_attr(&path)));
-                return Ok(html);
-            }
-
-            if let Some(map) = val.as_object() {
-                html.push_str(&format!("<{}", tag));
-                for (k, v) in default_attrs {
-                    html.push_str(&format!(r#" {}="{}""#, k, v));
-                }
-                for (k, v) in map {
-                    let v = v
-                        .as_str()
-                        .ok_or_else(|| tera::Error::msg(format!("Invalid type for key {}", k)))?;
-                    let mut val = v.to_string();
-                    if k == path_attr
-                        && !v.starts_with('/')
-                        && !v.starts_with("http")
-                        && !v.starts_with("mailto:")
-                    {
-                        val = format!("/{}", v);
-                    }
-                    html.push_str(&format!(r#" {}="{}""#, k, escape_html_attr(&val)));
-                }
-                html.push('>');
-                return Ok(html);
-            }
-
-            Err(tera::Error::msg("Invalid path type"))
-        }
-
-        let path = args
-            .get("path")
-            .ok_or_else(|| tera::Error::msg("Missing 'path'"))?;
-        let html = match path {
-            Value::Array(arr) => {
-                let mut out = Vec::new();
-                for v in arr {
-                    out.push(build_tag(
-                        &self.tag,
-                        &self.default_attrs,
-                        &self.path_attr,
-                        v,
-                    )?);
-                }
-                out.join("\n")
-            }
-            _ => build_tag(&self.tag, &self.default_attrs, &self.path_attr, path)?,
-        };
-        Ok(Value::String(html))
-    }
-}
-
-macro_rules! define_tag_helper {
-    ($name:ident, $tag:expr, $path_attr:expr, { $($k:expr => $v:expr),* }) => {
-        #[derive(Clone)]
-        struct $name;
-        impl Function<TeraResult<Value>> for $name {
-            fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-                let helper = TagHelper::new($tag, $path_attr, &[ $(($k, $v)),* ]);
-                helper.call(args)
-            }
-        }
+        None => Utc::now().timestamp(),
     };
+    let fmt = kwargs
+        .get::<String>("fmt")?
+        .unwrap_or_else(|| "%Y-%m-%d %H:%M:%S".to_string());
+    let date = DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now);
+    Ok(Value::normal_string(&date.format(&fmt).to_string()))
 }
 
-define_tag_helper!(CssHelper, "link", "href", { "rel" => "stylesheet" });
-define_tag_helper!(JsHelper, "script", "src", {});
-define_tag_helper!(LinkHelper, "a", "href", {});
-define_tag_helper!(ImageHelper, "img", "src", {});
-define_tag_helper!(MailHelper, "a", "href", {});
-define_tag_helper!(FaviconHelper, "link", "href", { "rel" => "icon" });
-define_tag_helper!(FeedHelper, "link", "href", { "rel" => "alternate", "type" => "application/rss+xml" });
-define_tag_helper!(MetaHelper, "meta", "content", { "name" => "generator" });
-
-macro_rules! define_url_helper {
-    ($name:ident, url) => {
-        #[derive(Clone)]
-        struct $name;
-        impl Function<TeraResult<Value>> for $name {
-            fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-                let site_url = &CONFIG.load().site.url;
-                let path = match_value_or_default!(args.get("path"), Value::String(v) => v);
-                let relative =
-                    match_value_or_default!(args.get("relative"), Value::Bool(v) => v, &true);
-                let res = if *relative {
-                    if path.starts_with('/') {
-                        format!(".{}", path)
-                    } else {
-                        format!("./{}", path)
-                    }
-                } else {
-                    join_url(&super::extract_root_path(site_url), path)
-                };
-                Ok(Value::String(res))
-            }
+fn build_tag(
+    tag: &str,
+    path_attr: &str,
+    attrs: &[(&str, &str)],
+    val: &Value,
+) -> TeraResult<String> {
+    let mut html = String::new();
+    if let Some(s) = val.as_str() {
+        let mut path = s.to_string();
+        if !path.starts_with('/') && !path.starts_with("http") && !path.starts_with("mailto:") {
+            path = format!("/{path}");
         }
-    };
 
-    ($name:ident, fullurl) => {
-        #[derive(Clone)]
-        struct $name;
-        impl Function<TeraResult<Value>> for $name {
-            fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-                let site_url = &CONFIG.load().site.url;
-                let path = match_value_or_default!(args.get("path"), Value::String(v) => v);
-                Ok(Value::String(join_url(site_url, path)))
-            }
+        html.push_str(&format!("<{tag}"));
+        for (k, v) in attrs {
+            let _ = write!(html, r#" {k}="{v}""#);
         }
-    };
-}
-
-define_url_helper!(UrlHelper, url);
-define_url_helper!(FullUrlHelper, fullurl);
-
-#[derive(Clone)]
-struct GravatarHelper;
-
-impl Function<TeraResult<Value>> for GravatarHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-        let mail = match_value_or_default!(args.get("mail"), Value::String(v) => v);
-        let mut hashed_email = Sha256::new();
-        hashed_email.update(mail.trim());
-        let hash: [u8; 32] = hashed_email.finalize().into();
-        let url = format!(
-            "https://www.gravatar.com/avatar/{}",
-            hash.iter()
-                .map(|b| format!("{:02X}", b))
-                .collect::<String>()
-        );
-        Ok(Value::String(url))
+        let _ = write!(html, r#" {path_attr}="{}">"#, escape_html_attr(&path));
+        return Ok(html);
     }
-}
 
-#[derive(Clone)]
-struct PartialHelper;
-
-impl Function<TeraResult<Value>> for PartialHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-        let part_name =
-            match_value_or_default!(args.get("name"), Value::String(v) => v, &String::from(""));
-        if part_name.is_empty() {
-            return Ok(Value::Null);
+    if let Some(map) = val.as_map() {
+        html.push_str(&format!("<{tag}"));
+        for (k, v) in attrs {
+            let _ = write!(html, r#" {k}="{v}""#);
         }
-        let tera = &TERA.load();
-        let context = tera::Context::new();
-        let render_str = tera.render(format!("{}.html", part_name).as_str(), &context)?;
-        Ok(Value::String(render_str))
+        for (k, v) in map {
+            let s = v.as_str().ok_or_else(|| {
+                Error::message(format!(
+                    "Invalid type for key {}",
+                    k.as_str().unwrap_or_default()
+                ))
+            })?;
+            let mut val = s.to_string();
+            if k.as_str() == Some(path_attr)
+                && !s.starts_with('/')
+                && !s.starts_with("http")
+                && !s.starts_with("mailto:")
+            {
+                val = format!("/{val}");
+            }
+            let _ = write!(
+                html,
+                r#" {}="{}""#,
+                k.as_str().unwrap_or_default(),
+                escape_html_attr(&val)
+            );
+        }
+        html.push('>');
+        return Ok(html);
     }
+
+    Err(Error::message("Invalid path type"))
 }
 
-#[derive(Clone)]
-struct ListHelper {
-    list: String,
+/// Build an HTML tag (`css`, `js`, `link`, ...) for a path or a map of attributes.
+fn tag_call(
+    kwargs: Kwargs,
+    tag: &str,
+    path_attr: &str,
+    attrs: &[(&str, &str)],
+) -> TeraResult<Value> {
+    let path = kwargs.must_get::<Value>("path")?;
+    let html = match path.as_array() {
+        Some(paths) => paths
+            .iter()
+            .map(|p| build_tag(tag, path_attr, attrs, p))
+            .collect::<TeraResult<Vec<_>>>()?
+            .join("\n"),
+        None => build_tag(tag, path_attr, attrs, &path)?,
+    };
+    Ok(Value::safe_string(&html))
 }
 
-impl Function<TeraResult<Value>> for ListHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-        let orderby = match_value_or_default!(args.get("orderby"), Value::String(v) => v, &String::from("name"));
-        let order = match_value_or_default!(args.get("order"), Value::Number(v) => v, 1, |v: &Number| v.as_i64().unwrap_or(1));
-        let show_count =
-            match_value_or_default!(args.get("show_count"), Value::Bool(v) => v, &true);
-        let list = match_value_or_default!(args.get("list"), Value::Bool(v) => v, &true);
-        let separator = match_value_or_default!(args.get("separator"), Value::String(v) => v, &String::from(","));
-        let amount = match_value_or_default!(
-            args.get("amount"),
-            Value::Number(v) => v,
-            DEFAULT_AMOUNT,
-            |v: &Number| v.as_i64().unwrap_or(DEFAULT_AMOUNT)
-        );
-        let tag_class =
-            match_value_or_default!(args.get("tag_class"), Value::Object(v) => v, &Map::new());
-        let tag_class_ul = match_value_or_default!(tag_class.get("ul"), Value::String(v) => v, &String::from("ul"));
-        let tag_class_li = match_value_or_default!(tag_class.get("li"), Value::String(v) => v, &String::from("li"));
-        let tag_class_a =
-            match_value_or_default!(tag_class.get("a"), Value::String(v) => v, &String::from("a"));
-        let tag_class_count = match_value_or_default!(tag_class.get("count"), Value::String(v) => v, &String::from("count"));
+fn register_tag_helpers(tera: &mut Tera) {
+    tera.register_function(
+        "css",
+        |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
+            tag_call(kwargs, "link", "href", &[("rel", "stylesheet")])
+        },
+    );
+    tera.register_function(
+        "js",
+        |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
+            tag_call(kwargs, "script", "src", &[])
+        },
+    );
+    tera.register_function(
+        "link",
+        |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
+            tag_call(kwargs, "a", "href", &[])
+        },
+    );
+    tera.register_function(
+        "image",
+        |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
+            tag_call(kwargs, "img", "src", &[])
+        },
+    );
+    tera.register_function(
+        "mail",
+        |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
+            tag_call(kwargs, "a", "href", &[])
+        },
+    );
+    tera.register_function(
+        "favicon",
+        |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
+            tag_call(kwargs, "link", "href", &[("rel", "icon")])
+        },
+    );
+    tera.register_function(
+        "feed",
+        |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
+            tag_call(
+                kwargs,
+                "link",
+                "href",
+                &[("rel", "alternate"), ("type", "application/rss+xml")],
+            )
+        },
+    );
+    tera.register_function(
+        "meta",
+        |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
+            tag_call(kwargs, "meta", "content", &[("name", "generator")])
+        },
+    );
+}
 
-        let mut res = String::new();
-        let site = &SITE.load();
+fn url_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
+    let site_url = &CONFIG.load().site.url;
+    let path = kwargs.must_get::<String>("path")?;
+    let relative = kwargs.get::<bool>("relative")?.unwrap_or(true);
+    let res = if relative {
+        if path.starts_with('/') {
+            format!(".{path}")
+        } else {
+            format!("./{path}")
+        }
+    } else {
+        join_url(&extract_root_path(site_url), &path)
+    };
+    Ok(Value::normal_string(&res))
+}
 
-        let render_list = |res: &mut String, iter: Vec<(String, String, usize)>| {
+fn full_url_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
+    let site_url = &CONFIG.load().site.url;
+    let path = kwargs.must_get::<String>("path")?;
+    Ok(Value::normal_string(&join_url(site_url, &path)))
+}
+
+fn gravatar_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
+    let mail = kwargs.must_get::<String>("mail")?;
+    let mut hashed_email = Sha256::new();
+    hashed_email.update(mail.trim());
+    let hash = HEXUPPER.encode(hashed_email.finalize().as_ref());
+    let url = format!("https://www.gravatar.com/avatar/{hash}");
+    Ok(Value::normal_string(&url))
+}
+
+fn partial_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
+    let name = kwargs.get::<String>("name")?.unwrap_or_default();
+    if name.is_empty() {
+        return Ok(Value::none());
+    }
+    let tera = TERA.load();
+    let rendered = tera.render(&format!("{name}.html"), &Context::new())?;
+    Ok(Value::safe_string(&rendered))
+}
+
+#[derive(Clone, Copy)]
+enum ListKind {
+    Category,
+    Tag,
+    Post,
+    Page,
+}
+
+/// Class of a `tag_class` map entry, falling back to the default.
+fn class_of(map: &Map, key: &str, default: &str) -> String {
+    map.iter()
+        .find(|(k, _)| k.as_str() == Some(key))
+        .and_then(|(_, v)| v.as_str())
+        .unwrap_or(default)
+        .to_string()
+}
+
+fn list_call(kwargs: Kwargs, kind: ListKind) -> TeraResult<Value> {
+    let orderby = kwargs
+        .get::<String>("orderby")?
+        .unwrap_or_else(|| "name".to_string());
+    let order = kwargs.get::<i64>("order")?.unwrap_or(1);
+    let show_count = kwargs.get::<bool>("show_count")?.unwrap_or(true);
+    let list = kwargs.get::<bool>("list")?.unwrap_or(true);
+    let separator = kwargs
+        .get::<String>("separator")?
+        .unwrap_or_else(|| ",".to_string());
+    let amount = kwargs.get::<usize>("amount")?.unwrap_or(DEFAULT_AMOUNT);
+    let tag_class = kwargs.get::<Map>("tag_class")?.unwrap_or_default();
+    let ul_class = class_of(&tag_class, "ul", "ul");
+    let li_class = class_of(&tag_class, "li", "li");
+    let a_class = class_of(&tag_class, "a", "a");
+    let count_class = class_of(&tag_class, "count", "count");
+
+    let mut res = String::new();
+    let site = &SITE.load();
+
+    let render_list = |res: &mut String, iter: Vec<(String, String, usize)>| {
+        res.push_str(&format!(r#"<ul class="{ul_class}" itemprop="keywords">"#));
+        for (i, (name, href, count)) in iter.into_iter().enumerate() {
+            if i >= amount {
+                break;
+            }
+            res.push_str(&format!(r#"<li class="{li_class}">"#));
             res.push_str(&format!(
-                r#"<ul class="{}" itemprop="keywords">"#,
-                tag_class_ul
+                r#"<a class="{a_class}" href="{href}">{}</a>"#,
+                escape_html_text(&name)
             ));
-            for (i, (name, href, count)) in iter.into_iter().enumerate() {
-                if i >= amount as usize {
-                    break;
-                }
-                res.push_str(&format!(r#"<li class="{}">"#, tag_class_li));
-                res.push_str(&format!(
-                    r#"<a class="{}" href="{}">{}</a>"#,
-                    tag_class_a, href, name
-                ));
-                if *show_count && count > 0 {
-                    res.push_str(&format!(
-                        r#"<span class="{}">{}</span>"#,
-                        tag_class_count, count
-                    ));
-                }
-                res.push_str("</li>");
+            if show_count && count > 0 {
+                res.push_str(&format!(r#"<span class="{count_class}">{count}</span>"#));
             }
-            res.push_str("</ul>");
-        };
-
-        let render_inline = |res: &mut String, iter: Vec<(String, String, usize)>| {
-            for (i, (name, href, count)) in iter.into_iter().enumerate() {
-                if i >= amount as usize {
-                    break;
-                }
-                res.push_str(&format!(
-                    r#"<a class="{}" href="{}">{}"#,
-                    tag_class_a, href, name
-                ));
-                if *show_count && count > 0 {
-                    res.push_str(&format!(
-                        r#"<span class="{}">{}</span>"#,
-                        tag_class_count, count
-                    ));
-                }
-                res.push_str(&format!("</a>{}", separator));
-            }
-        };
-
-        match self.list.as_str() {
-            "category" | "tag" => {
-                let data = if self.list == "category" {
-                    site.categories.iter()
-                } else {
-                    site.tags.iter()
-                };
-                let mut tmp: Vec<_> = data
-                    .map(|(k, v)| (k.clone(), v.path.clone(), v.posts.len()))
-                    .collect();
-                match orderby.as_str() {
-                    "name" => {
-                        if order == -1 {
-                            tmp.sort_by(|x, y| y.0.cmp(&x.0));
-                        } else {
-                            tmp.sort_by(|x, y| x.0.cmp(&y.0));
-                        }
-                    }
-                    "count" => {
-                        if order == -1 {
-                            tmp.sort_by_key(|y| std::cmp::Reverse(y.2));
-                        } else {
-                            tmp.sort_by_key(|x| x.2);
-                        }
-                    }
-                    _ => {}
-                }
-
-                if *list {
-                    render_list(&mut res, tmp);
-                } else {
-                    render_inline(&mut res, tmp);
-                }
-            }
-            "post" | "page" => {
-                let mut tmp = if self.list == "post" {
-                    site.posts.clone()
-                } else {
-                    site.pages.clone()
-                };
-                tmp.sort_by(|x, y| {
-                    let x_date = parse_datetime(&x.date).unwrap_or_else(Utc::now);
-                    let y_date = parse_datetime(&y.date).unwrap_or_else(Utc::now);
-                    if order == -1 {
-                        y_date.cmp(&x_date)
-                    } else {
-                        x_date.cmp(&y_date)
-                    }
-                });
-                let mapped: Vec<_> = tmp
-                    .into_iter()
-                    .map(|p| {
-                        let title = p.title;
-                        (title.clone(), title, 0)
-                    })
-                    .collect();
-
-                if *list {
-                    render_list(&mut res, mapped);
-                } else {
-                    render_inline(&mut res, mapped);
-                }
-            }
-            _ => {}
+            res.push_str("</li>");
         }
-        Ok(Value::String(res))
-    }
-}
+        res.push_str("</ul>");
+    };
 
-fn make_list_helper(list: &str) -> ListHelper {
-    ListHelper {
-        list: list.to_string(),
-    }
-}
-
-macro_rules! define_list_helper {
-    ($name:ident, $list:expr) => {
-        #[derive(Clone)]
-        struct $name;
-        impl Function<TeraResult<Value>> for $name {
-            fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-                let helper = make_list_helper($list);
-                helper.call(args)
+    let render_inline = |res: &mut String, iter: Vec<(String, String, usize)>| {
+        for (i, (name, href, count)) in iter.into_iter().enumerate() {
+            if i >= amount {
+                break;
             }
+            // the count badge is rendered inside the link
+            res.push_str(&format!(
+                r#"<a class="{a_class}" href="{href}">{}"#,
+                escape_html_text(&name)
+            ));
+            if show_count && count > 0 {
+                res.push_str(&format!(r#"<span class="{count_class}">{count}</span>"#));
+            }
+            res.push_str(&format!("</a>{separator}"));
         }
     };
-}
 
-define_list_helper!(CategoriesHelper, "category");
-define_list_helper!(TagsHelper, "tag");
-define_list_helper!(PostsHelper, "post");
-define_list_helper!(PagesHelper, "page");
-
-#[derive(Clone)]
-struct PaginatorHelper;
-
-impl Function<TeraResult<Value>> for PaginatorHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-        let current = match_value_or_default!(
-            args.get("current"),
-            Value::Number(v) => v,
-            1,
-            |v: &Number| v.as_i64().unwrap_or(1).max(1)
-        );
-        let total = match_value_or_default!(
-            args.get("total"),
-            Value::Number(v) => v,
-            1,
-            |v: &Number| v.as_i64().unwrap_or(1).max(1)
-        );
-        let window = match_value_or_default!(
-            args.get("window"),
-            Value::Number(v) => v,
-            2,
-            |v: &Number| v.as_i64().unwrap_or(2).max(0)
-        );
-        let base = match_value_or_default!(
-            args.get("base"),
-            Value::String(v) => v,
-            &String::from("?page=")
-        );
-        let prev_text = match_value_or_default!(
-            args.get("prev_text"),
-            Value::String(v) => v,
-            &String::from("Prev")
-        );
-        let next_text = match_value_or_default!(
-            args.get("next_text"),
-            Value::String(v) => v,
-            &String::from("Next")
-        );
-
-        let current = current.min(total);
-        let start = (current - window).max(1);
-        let end = (current + window).min(total);
-        let mut html = String::from(r#"<nav class="pagination" aria-label="Pagination">"#);
-
-        if current > 1 {
-            let _ = write!(
-                html,
-                r#"<a class="pagination-prev" href="{}{}">{}</a>"#,
-                base,
-                current - 1,
-                prev_text
-            );
-        }
-
-        html.push_str(r#"<ol class="pagination-list">"#);
-        for page in start..=end {
-            if page == current {
-                let _ = write!(
-                    html,
-                    r#"<li><span class="pagination-current" aria-current="page">{}</span></li>"#,
-                    page
-                );
-            } else {
-                let _ = write!(
-                    html,
-                    r#"<li><a class="pagination-link" href="{}{}">{}</a></li>"#,
-                    base, page, page
-                );
-            }
-        }
-        html.push_str("</ol>");
-
-        if current < total {
-            let _ = write!(
-                html,
-                r#"<a class="pagination-next" href="{}{}">{}</a>"#,
-                base,
-                current + 1,
-                next_text
-            );
-        }
-
-        html.push_str("</nav>");
-        Ok(Value::String(html))
-    }
-}
-
-#[derive(Clone)]
-struct NumberFormatHelper;
-
-impl Function<TeraResult<Value>> for NumberFormatHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-        let value = match args.get("value") {
-            Some(Value::Number(n)) => n
-                .as_i64()
-                .map(|v| v.to_string())
-                .or_else(|| n.as_u64().map(|v| v.to_string()))
-                .or_else(|| n.as_f64().map(|v| v.to_string()))
-                .unwrap_or_else(|| "0".to_string()),
-            Some(Value::String(s)) => s.clone(),
-            _ => return Err(tera::Error::msg("Missing 'value'")),
-        };
-        let separator = match_value_or_default!(
-            args.get("separator"),
-            Value::String(v) => v,
-            &String::from(",")
-        );
-
-        let formatted = format_number_with_separator(&value, separator);
-        Ok(Value::String(formatted))
-    }
-}
-
-#[derive(Clone)]
-struct OpenGraphHelper;
-
-impl Function<TeraResult<Value>> for OpenGraphHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-        let config = CONFIG.load();
-        let title = match_value_or_default!(
-            args.get("title"),
-            Value::String(v) => v,
-            &config.site.title
-        );
-        let description = match_value_or_default!(
-            args.get("description"),
-            Value::String(v) => v,
-            &config.site.description
-        );
-        let url = match args.get("url") {
-            Some(Value::String(path)) if is_absolute_url(path) => path.clone(),
-            Some(Value::String(path)) => join_url(&config.site.url, path),
-            _ => config.site.url.clone(),
-        };
-        let image = match args.get("image") {
-            Some(Value::String(path)) if is_absolute_url(path) => path.clone(),
-            Some(Value::String(path)) => join_url(&config.site.url, path),
-            _ => String::new(),
-        };
-        let kind = match_value_or_default!(
-            args.get("type"),
-            Value::String(v) => v,
-            &String::from("website")
-        );
-
-        let mut tags = vec![
-            ("og:title", title.to_string()),
-            ("og:description", description.to_string()),
-            ("og:type", kind.to_string()),
-            ("og:url", url),
-            ("og:site_name", config.site.title.clone()),
-        ];
-        if !image.is_empty() {
-            tags.push(("og:image", image));
-        }
-
-        let mut html = String::new();
-        for (name, content) in tags {
-            let _ = writeln!(
-                html,
-                r#"<meta property="{}" content="{}">"#,
-                name,
-                escape_html_attr(&content)
-            );
-        }
-        Ok(Value::String(html))
-    }
-}
-
-#[derive(Clone)]
-struct TocHelper;
-
-impl Function<TeraResult<Value>> for TocHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-        let content = match_value_or_default!(args.get("content"), Value::String(v) => v);
-        let max_level = match_value_or_default!(
-            args.get("max_level"),
-            Value::Number(v) => v,
-            6,
-            |v: &Number| v.as_u64().unwrap_or(6) as usize
-        );
-
-        let mut items = Vec::new();
-        let mut current_level = None;
-        let mut current_text = String::new();
-
-        for event in MarkdownParser::new(content) {
-            match event {
-                Event::Start(Tag::Heading { level, .. }) => {
-                    current_level = Some(level_to_usize(level));
-                    current_text.clear();
-                }
-                Event::Text(text) | Event::Code(text) => {
-                    if current_level.is_some() {
-                        current_text.push_str(&text);
+    match kind {
+        ListKind::Category | ListKind::Tag => {
+            let data = match kind {
+                ListKind::Category => site.categories.iter(),
+                ListKind::Tag => site.tags.iter(),
+                _ => unreachable!(),
+            };
+            let mut tmp: Vec<_> = data
+                .map(|(k, v)| (k.clone(), v.path.clone(), v.posts.len()))
+                .collect();
+            match orderby.as_str() {
+                "name" => {
+                    if order == -1 {
+                        tmp.sort_by(|x, y| y.0.cmp(&x.0));
+                    } else {
+                        tmp.sort_by(|x, y| x.0.cmp(&y.0));
                     }
                 }
-                Event::End(TagEnd::Heading(..)) => {
-                    if let Some(level) = current_level.take()
-                        && level <= max_level
-                        && !current_text.trim().is_empty()
-                    {
-                        let text = current_text.trim().to_string();
-                        items.push((level, text.clone(), slugify(&text)));
+                "count" => {
+                    if order == -1 {
+                        tmp.sort_by_key(|y| std::cmp::Reverse(y.2));
+                    } else {
+                        tmp.sort_by_key(|x| x.2);
                     }
-                    current_text.clear();
                 }
                 _ => {}
             }
-        }
 
-        if items.is_empty() {
-            return Ok(Value::String(String::new()));
+            if list {
+                render_list(&mut res, tmp);
+            } else {
+                render_inline(&mut res, tmp);
+            }
         }
+        ListKind::Post | ListKind::Page => {
+            let mut tmp = match kind {
+                ListKind::Post => site.posts.clone(),
+                ListKind::Page => site.pages.clone(),
+                _ => unreachable!(),
+            };
+            tmp.sort_by(|x, y| {
+                let x_date = parse_datetime(&x.date).unwrap_or_else(Utc::now);
+                let y_date = parse_datetime(&y.date).unwrap_or_else(Utc::now);
+                if order == -1 {
+                    y_date.cmp(&x_date)
+                } else {
+                    x_date.cmp(&y_date)
+                }
+            });
+            let mapped: Vec<_> = tmp
+                .into_iter()
+                .map(|p| {
+                    let title = p.title;
+                    (title.clone(), title, 0)
+                })
+                .collect();
 
-        let mut html = String::from(r#"<nav class="toc" aria-label="Table of contents"><ul>"#);
-        for (level, text, slug) in items {
+            if list {
+                render_list(&mut res, mapped);
+            } else {
+                render_inline(&mut res, mapped);
+            }
+        }
+    }
+    Ok(Value::safe_string(&res))
+}
+
+fn register_list_helpers(tera: &mut Tera) {
+    for (name, kind) in [
+        ("list_categories", ListKind::Category),
+        ("list_tags", ListKind::Tag),
+        ("list_posts", ListKind::Post),
+        ("list_pages", ListKind::Page),
+    ] {
+        tera.register_function(
+            name,
+            move |kwargs: Kwargs, _state: &State| -> TeraResult<Value> { list_call(kwargs, kind) },
+        );
+    }
+}
+
+fn paginator_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
+    let current = kwargs.get::<i64>("current")?.unwrap_or(1).max(1);
+    let total = kwargs.get::<i64>("total")?.unwrap_or(1).max(1);
+    let window = kwargs.get::<i64>("window")?.unwrap_or(2).max(0);
+    let base = escape_html_attr(
+        &kwargs
+            .get::<String>("base")?
+            .unwrap_or_else(|| "?page=".to_string()),
+    );
+    let prev_text = escape_html_text(
+        &kwargs
+            .get::<String>("prev_text")?
+            .unwrap_or_else(|| "Prev".to_string()),
+    );
+    let next_text = escape_html_text(
+        &kwargs
+            .get::<String>("next_text")?
+            .unwrap_or_else(|| "Next".to_string()),
+    );
+
+    let current = current.min(total);
+    let start = (current - window).max(1);
+    let end = (current + window).min(total);
+    let mut html = String::from(r#"<nav class="pagination" aria-label="Pagination">"#);
+
+    if current > 1 {
+        let prev = current - 1;
+        let _ = write!(
+            html,
+            r#"<a class="pagination-prev" href="{base}{prev}">{prev_text}</a>"#
+        );
+    }
+
+    html.push_str(r#"<ol class="pagination-list">"#);
+    for page in start..=end {
+        if page == current {
             let _ = write!(
                 html,
-                r##"<li class="toc-level-{}"><a href="#{}">{}</a></li>"##,
-                level,
-                slug,
-                escape_html_text(&text)
+                r#"<li><span class="pagination-current" aria-current="page">{page}</span></li>"#
+            );
+        } else {
+            let _ = write!(
+                html,
+                r#"<li><a class="pagination-link" href="{base}{page}">{page}</a></li>"#
             );
         }
-        html.push_str("</ul></nav>");
-        Ok(Value::String(html))
     }
+    html.push_str("</ol>");
+
+    if current < total {
+        let next = current + 1;
+        let _ = write!(
+            html,
+            r#"<a class="pagination-next" href="{base}{next}">{next_text}</a>"#
+        );
+    }
+
+    html.push_str("</nav>");
+    Ok(Value::safe_string(&html))
+}
+
+fn number_format_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
+    let Some(value) = kwargs.get::<Value>("value")? else {
+        return Err(Error::message("Missing 'value'"));
+    };
+    let value = if let Some(s) = value.as_str() {
+        s.to_string()
+    } else if let Some(i) = value.as_i64() {
+        i.to_string()
+    } else if let Some(u) = value.as_u64() {
+        u.to_string()
+    } else if let Some(f) = value.as_f64() {
+        f.to_string()
+    } else {
+        return Err(Error::message(
+            "Invalid 'value': expected a number or a string",
+        ));
+    };
+    let separator = kwargs
+        .get::<String>("separator")?
+        .unwrap_or_else(|| ",".to_string());
+
+    let formatted = format_number_with_separator(&value, &separator);
+    Ok(Value::normal_string(&formatted))
+}
+
+fn open_graph_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
+    let config = CONFIG.load();
+    let title = kwargs
+        .get::<String>("title")?
+        .unwrap_or_else(|| config.site.title.clone());
+    let description = kwargs
+        .get::<String>("description")?
+        .unwrap_or_else(|| config.site.description.clone());
+    let url = match kwargs.get::<String>("url")? {
+        Some(path) if is_absolute_url(&path) => path,
+        Some(path) => join_url(&config.site.url, &path),
+        None => config.site.url.clone(),
+    };
+    let image = match kwargs.get::<String>("image")? {
+        Some(path) if is_absolute_url(&path) => path,
+        Some(path) => join_url(&config.site.url, &path),
+        None => String::new(),
+    };
+    let kind = kwargs
+        .get::<String>("type")?
+        .unwrap_or_else(|| "website".to_string());
+
+    let mut tags = vec![
+        ("og:title", title),
+        ("og:description", description),
+        ("og:type", kind),
+        ("og:url", url),
+        ("og:site_name", config.site.title.clone()),
+    ];
+    if !image.is_empty() {
+        tags.push(("og:image", image));
+    }
+
+    let mut html = String::new();
+    for (name, content) in tags {
+        let _ = writeln!(
+            html,
+            r#"<meta property="{name}" content="{}">"#,
+            escape_html_attr(&content)
+        );
+    }
+    Ok(Value::safe_string(&html))
+}
+
+fn toc_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
+    let content = kwargs.must_get::<String>("content")?;
+    let max_level = kwargs.get::<usize>("max_level")?.unwrap_or(6);
+
+    let mut items = Vec::new();
+    let mut current_level = None;
+    let mut current_text = String::new();
+
+    for event in MarkdownParser::new(&content) {
+        match event {
+            Event::Start(Tag::Heading { level, .. }) => {
+                current_level = Some(level_to_usize(level));
+                current_text.clear();
+            }
+            Event::Text(text) | Event::Code(text) => {
+                if current_level.is_some() {
+                    current_text.push_str(&text);
+                }
+            }
+            Event::End(TagEnd::Heading(..)) => {
+                if let Some(level) = current_level.take()
+                    && level <= max_level
+                    && !current_text.trim().is_empty()
+                {
+                    let text = current_text.trim().to_string();
+                    items.push((level, text.clone(), slugify(&text)));
+                }
+                current_text.clear();
+            }
+            _ => {}
+        }
+    }
+
+    if items.is_empty() {
+        return Ok(Value::safe_string(""));
+    }
+
+    let mut html = String::from(r#"<nav class="toc" aria-label="Table of contents"><ul>"#);
+    for (level, text, slug) in items {
+        let _ = write!(
+            html,
+            r##"<li class="toc-level-{level}"><a href="#{slug}">{}</a></li>"##,
+            escape_html_text(&text)
+        );
+    }
+    html.push_str("</ul></nav>");
+    Ok(Value::safe_string(&html))
 }
 
 fn format_number_with_separator(value: &str, separator: &str) -> String {
@@ -795,8 +607,8 @@ fn format_number_with_separator(value: &str, separator: &str) -> String {
     let int_formatted: String = grouped_rev.chars().rev().collect();
 
     match frac_part {
-        Some(frac) if !frac.is_empty() => format!("{}{}.{}", sign, int_formatted, frac),
-        _ => format!("{}{}", sign, int_formatted),
+        Some(frac) if !frac.is_empty() => format!("{sign}{int_formatted}.{frac}"),
+        _ => format!("{sign}{int_formatted}"),
     }
 }
 
@@ -842,116 +654,101 @@ fn escape_html_text(input: &str) -> String {
         .replace('>', "&gt;")
 }
 
-#[derive(Clone)]
-struct RhaiHelper {
-    engine: Arc<Engine>,
-    ast: Arc<AST>,
-    fn_name: String,
-}
-
-impl RhaiHelper {
-    fn new(engine: Arc<Engine>, ast: Arc<AST>, fn_name: impl Into<String>) -> Self {
-        Self {
-            engine,
-            ast,
-            fn_name: fn_name.into(),
-        }
-    }
-}
+/// Rhai engine safety limits for untrusted helper scripts.
+const MAX_OPERATIONS: u64 = 1_000_000;
+const MAX_EXPR_DEPTHS: (usize, usize) = (32, 64);
+const MAX_CALL_LEVELS: usize = 64;
 
 fn value_to_dynamic(v: &Value) -> Dynamic {
-    match v {
-        Value::Null => Dynamic::UNIT,
-        Value::Bool(b) => Dynamic::from_bool(*b),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Dynamic::from_int(i)
-            } else if let Some(f) = n.as_f64() {
-                Dynamic::from_float(f)
-            } else {
-                Dynamic::UNIT
+    if v.is_none() {
+        return Dynamic::UNIT;
+    }
+    if let Some(b) = v.as_bool() {
+        return Dynamic::from_bool(b);
+    }
+    if let Some(i) = v.as_i64() {
+        return Dynamic::from_int(i);
+    }
+    if let Some(f) = v.as_f64() {
+        return Dynamic::from_float(f);
+    }
+    if let Some(s) = v.as_str() {
+        return Dynamic::from(s.to_string());
+    }
+    if let Some(a) = v.as_array() {
+        let mut arr = Vec::with_capacity(a.len());
+        for e in a {
+            arr.push(value_to_dynamic(e));
+        }
+        return Dynamic::from_array(arr);
+    }
+    if let Some(m) = v.as_map() {
+        let mut map = RhaiMap::new();
+        for (k, val) in m {
+            if let Some(k) = k.as_str() {
+                map.insert(k.into(), value_to_dynamic(val));
             }
         }
-        Value::String(s) => Dynamic::from(s.clone()),
-        Value::Array(a) => {
-            let mut arr = Vec::with_capacity(a.len());
-            for e in a {
-                arr.push(value_to_dynamic(e));
-            }
-            Dynamic::from_array(arr)
+        return Dynamic::from_map(map);
+    }
+    Dynamic::UNIT
+}
+
+fn dynamic_to_value(res: Dynamic) -> Value {
+    if res.is::<String>() {
+        Value::normal_string(&res.cast::<String>())
+    } else if res.is::<i64>() {
+        Value::from(res.cast::<i64>())
+    } else if res.is::<f64>() {
+        Value::from(res.cast::<f64>())
+    } else if res.is::<bool>() {
+        Value::from(res.cast::<bool>())
+    } else if res.is::<()>() {
+        Value::none()
+    } else if res.is::<rhai::ImmutableString>() {
+        // also string-like
+        Value::normal_string(&res.to_string())
+    } else if res.is_array() || res.is_map() {
+        // Serialize via JSON string as fallback
+        match Value::try_from_serializable(&res) {
+            Ok(v) => v,
+            Err(_) => Value::normal_string(&res.to_string()),
         }
-        Value::Object(o) => {
-            let mut map = RhaiMap::new();
-            for (k, v) in o {
-                map.insert(k.into(), value_to_dynamic(v));
-            }
-            Dynamic::from_map(map)
-        }
+    } else {
+        Value::normal_string(&res.to_string())
     }
 }
 
-impl Function<TeraResult<Value>> for RhaiHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
-        let mut scope = rhai::Scope::new();
-        let mut arg_map = RhaiMap::new();
-        for (k, v) in args {
-            arg_map.insert(k.clone().into(), value_to_dynamic(v));
+fn rhai_call(kwargs: Kwargs, engine: &Engine, ast: &AST) -> TeraResult<Value> {
+    let mut scope = rhai::Scope::new();
+    // all template call args are passed to `fn main(args)` as one map
+    let mut arg_map = RhaiMap::new();
+    for (k, v) in kwargs.iter() {
+        if let Some(k) = k.as_str() {
+            arg_map.insert(k.into(), value_to_dynamic(v));
         }
-
-        // Only accept a map named args
-        scope.push("args", Dynamic::from_map(arg_map));
-        let res = self
-            .engine
-            .call_fn::<Dynamic>(&mut scope, &self.ast, &self.fn_name, ())
-            .map_err(|e| tera::Error::msg(format!("Rhai call error: {}", e)))?;
-        let out = if res.is::<String>() {
-            Value::String(res.cast::<String>())
-        } else if res.is::<i64>() {
-            let i = res.cast::<i64>();
-            Value::Number(serde_json::Number::from(i))
-        } else if res.is::<f64>() {
-            let f = res.cast::<f64>();
-            Value::Number(
-                serde_json::Number::from_f64(f).unwrap_or_else(|| serde_json::Number::from(0)),
-            )
-        } else if res.is::<bool>() {
-            Value::Bool(res.cast::<bool>())
-        } else if res.is::<()>() {
-            Value::Null
-        } else if res.is::<rhai::ImmutableString>() {
-            // also string-like
-            Value::String(res.to_string())
-        } else if res.is_array() || res.is_map() {
-            // Serialize via JSON string as fallback
-            match rhai::serde::to_dynamic(&res).and_then(|d| {
-                serde_json::to_value(d).map_err(|e| {
-                    Box::new(rhai::EvalAltResult::ErrorRuntime(
-                        format!("{}", e).into(),
-                        rhai::Position::NONE,
-                    ))
-                })
-            }) {
-                Ok(v) => v,
-                Err(_) => Value::String(res.to_string()),
-            }
-        } else {
-            Value::String(res.to_string())
-        };
-        Ok(out)
     }
+
+    let res = engine
+        .call_fn::<Dynamic>(&mut scope, ast, "main", (arg_map,))
+        .map_err(|e| Error::message(format!("Rhai call error: {e}")))?;
+    Ok(dynamic_to_value(res))
 }
 
-pub(crate) fn load_rhai_helpers(helpers_dir: impl AsRef<Path>) -> TeraResult<()> {
+type CompiledRhai = (String, Arc<Engine>, Arc<AST>);
+
+/// Compile every `*.rhai` file in the helper dir. Each script must define
+/// `fn main(args)`; `call` is a reserved keyword in Rhai.
+pub(crate) fn compile_rhai_helpers(helpers_dir: impl AsRef<Path>) -> TeraResult<Vec<CompiledRhai>> {
     let dir = helpers_dir.as_ref();
     if !dir.exists() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let mut engine = Engine::new();
 
     engine.set_max_operations(MAX_OPERATIONS);
     engine.set_max_expr_depths(MAX_EXPR_DEPTHS.0, MAX_EXPR_DEPTHS.1);
     engine.set_max_call_levels(MAX_CALL_LEVELS);
-    engine.set_max_variables(1);
     engine.set_allow_looping(false);
     engine.set_optimization_level(rhai::OptimizationLevel::Simple);
     engine.disable_symbol("eval");
@@ -960,34 +757,375 @@ pub(crate) fn load_rhai_helpers(helpers_dir: impl AsRef<Path>) -> TeraResult<()>
 
     let engine = Arc::new(engine);
 
-    let mut to_add = vec![];
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
+    let mut helpers = Vec::new();
+    for entry in
+        fs::read_dir(dir).map_err(|e| Error::message(format!("Failed to read helper dir: {e}")))?
+    {
+        let entry = entry.map_err(|e| Error::message(format!("Failed to read helper dir: {e}")))?;
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) == Some("rhai") {
-            let name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap()
-                .to_string();
-            let script = fs::read_to_string(&path)?;
+            let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let script = fs::read_to_string(&path)
+                .map_err(|e| Error::message(format!("Failed to read {name}.rhai: {e}")))?;
             // precompile AST
             let ast = engine
                 .compile(&script)
-                .map_err(|e| tera::Error::msg(format!("Compile error in {}: {}", name, e)))?;
-            let ast = Arc::new(ast);
-
-            // custom helper def: fn call(args) -> string/primitive
-            let helper = RhaiHelper::new(engine.clone(), ast.clone(), "call");
-            to_add.push((name.clone(), helper));
-            info!("Registered Rhai helper: {}", name);
+                .map_err(|e| Error::message(format!("Compile error in {name}: {e}")))?;
+            helpers.push((name.to_string(), engine.clone(), Arc::new(ast)));
+            info!("Registered Rhai helper: {name}");
         }
     }
-    let helpers = HELPER.load();
-    let mut h_clone = (*helpers.clone()).clone();
-    for (name, helper) in to_add {
-        h_clone.register(&name, helper);
+    Ok(helpers)
+}
+
+/// Register compiled Rhai helpers on a template engine.
+pub(crate) fn register_rhai_helpers(tera: &mut Tera, helpers: Vec<CompiledRhai>) {
+    for (name, engine, ast) in helpers {
+        tera.register_function(
+            name,
+            move |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
+                rhai_call(kwargs, &engine, &ast)
+            },
+        );
     }
-    HELPER.store(Arc::new(h_clone));
+}
+
+/// Recompile the helper dir and register new or changed helpers into the live
+/// template engine. Called by the helper dir watcher.
+pub(crate) fn load_rhai_helpers(helpers_dir: impl AsRef<Path>) -> TeraResult<()> {
+    let helpers = compile_rhai_helpers(helpers_dir)?;
+    if helpers.is_empty() {
+        return Ok(());
+    }
+    let tera = TERA.load();
+    let mut tera = tera.as_ref().clone();
+    register_rhai_helpers(&mut tera, helpers);
+    TERA.store(Arc::new(tera));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use tera::Context;
+
+    fn render(template: &str) -> String {
+        render_result(template).unwrap()
+    }
+
+    fn render_result(template: &str) -> TeraResult<String> {
+        let mut tera = Tera::new();
+        register_helpers(&mut tera);
+        tera.render_str(template, &Context::new(), false)
+    }
+
+    #[test]
+    fn date_helper_epoch_and_formats() {
+        assert_eq!(render("{{ date(ts=0) }}"), "1970-01-01 00:00:00");
+        assert_eq!(render(r#"{{ date(ts=0, fmt="%Y-%m-%d") }}"#), "1970-01-01");
+        assert_eq!(
+            render(r#"{{ date(ts=1788318000, fmt="%Y-%m-%d") }}"#),
+            "2026-09-02"
+        );
+    }
+
+    #[test]
+    fn date_helper_string_inputs() {
+        // RFC3339 and the %Y-%m-%d %H:%M:%S format written by the CLI
+        assert_eq!(
+            render(r#"{{ date(ts="2026-09-01T12:00:00Z") }}"#),
+            "2026-09-01 12:00:00"
+        );
+        assert_eq!(
+            render(r#"{{ date(ts="2026-09-01 12:00:00") }}"#),
+            "2026-09-01 12:00:00"
+        );
+    }
+
+    #[test]
+    fn date_helper_defaults_to_now() {
+        let year = Utc::now().format("%Y").to_string();
+        assert_eq!(render(r#"{{ date(fmt="%Y") }}"#), year);
+        // unparseable strings fall back to now as well
+        assert_eq!(render(r#"{{ date(ts="garbage", fmt="%Y") }}"#), year);
+    }
+
+    #[test]
+    fn date_helper_rejects_non_date_types() {
+        let err = render_result(r#"{{ date(ts=true) }}"#).unwrap_err();
+        assert!(err.to_string().contains("expected an epoch number"));
+    }
+
+    #[test]
+    fn number_format_helper_groups_digits() {
+        assert_eq!(render("{{ number_format(value=1234567) }}"), "1,234,567");
+        assert_eq!(render("{{ number_format(value=-1234.5) }}"), "-1,234.5");
+        assert_eq!(render("{{ number_format(value=42) }}"), "42");
+        assert_eq!(render(r#"{{ number_format(value="") }}"#), "0");
+        assert_eq!(
+            render(r#"{{ number_format(value="9876543", separator=".") }}"#),
+            "9.876.543"
+        );
+        // numeric strings pass through untouched
+        assert_eq!(
+            render(r#"{{ number_format(value="1234567") }}"#),
+            "1,234,567"
+        );
+    }
+
+    #[test]
+    fn number_format_helper_missing_value() {
+        let err = render_result("{{ number_format(separator=',') }}").unwrap_err();
+        assert!(err.to_string().contains("Missing 'value'"));
+    }
+
+    #[test]
+    fn gravatar_helper_sha256_url() {
+        let mut hasher = Sha256::new();
+        hasher.update("test@example.com");
+        let expected = format!(
+            "https://www.gravatar.com/avatar/{}",
+            HEXUPPER.encode(hasher.finalize().as_ref())
+        );
+        assert_eq!(
+            render(r#"{{ gravatar(mail="test@example.com") }}"#),
+            expected
+        );
+    }
+
+    #[test]
+    fn tag_helpers_render_expected_html() {
+        assert_eq!(
+            render(r#"{{ css(path="/style.css") }}"#),
+            r#"<link rel="stylesheet" href="/style.css">"#
+        );
+        assert_eq!(
+            render(r#"{{ js(path="app.js") }}"#),
+            r#"<script src="/app.js">"#
+        );
+        assert_eq!(
+            render(r#"{{ favicon(path="/favicon.ico") }}"#),
+            r#"<link rel="icon" href="/favicon.ico">"#
+        );
+        assert_eq!(
+            render(r#"{{ feed(path="/rss.xml") }}"#),
+            r#"<link rel="alternate" type="application/rss+xml" href="/rss.xml">"#
+        );
+        assert_eq!(
+            render(r#"{{ meta(path="generator") }}"#),
+            r#"<meta name="generator" content="/generator">"#
+        );
+        assert_eq!(
+            render(r#"{{ link(path="/about") }}"#),
+            r#"<a href="/about">"#
+        );
+    }
+
+    #[test]
+    fn tag_helpers_keep_absolute_and_mailto_urls() {
+        assert_eq!(
+            render(r#"{{ css(path="https://cdn.example.com/a.css") }}"#),
+            r#"<link rel="stylesheet" href="https://cdn.example.com/a.css">"#
+        );
+        assert_eq!(
+            render(r#"{{ mail(path="mailto:hi@example.com") }}"#),
+            r#"<a href="mailto:hi@example.com">"#
+        );
+    }
+
+    #[test]
+    fn tag_helpers_render_arrays_as_multiple_tags() {
+        assert_eq!(
+            render(r#"{{ css(path=["/a.css", "/b.css"]) }}"#),
+            r#"<link rel="stylesheet" href="/a.css">
+<link rel="stylesheet" href="/b.css">"#
+        );
+    }
+
+    #[test]
+    fn tag_helpers_escape_attribute_values() {
+        // quotes and angle brackets in the path must not break out of the attribute
+        let html = render(r#"{{ link(path='/x" onmouseover="alert(1)') }}"#);
+        assert!(html.contains(r#"href="/x&quot; onmouseover=&quot;alert(1)""#));
+    }
+
+    #[test]
+    fn paginator_helper_single_page() {
+        assert_eq!(
+            render("{{ paginator(current=1, total=1) }}"),
+            r#"<nav class="pagination" aria-label="Pagination"><ol class="pagination-list"><li><span class="pagination-current" aria-current="page">1</span></li></ol></nav>"#
+        );
+    }
+
+    #[test]
+    fn paginator_helper_middle_page_window() {
+        assert_eq!(
+            render("{{ paginator(current=2, total=5, window=1) }}"),
+            r#"<nav class="pagination" aria-label="Pagination"><a class="pagination-prev" href="?page=1">Prev</a><ol class="pagination-list"><li><a class="pagination-link" href="?page=1">1</a></li><li><span class="pagination-current" aria-current="page">2</span></li><li><a class="pagination-link" href="?page=3">3</a></li></ol><a class="pagination-next" href="?page=3">Next</a></nav>"#
+        );
+    }
+
+    #[test]
+    fn paginator_helper_clamps_to_bounds() {
+        let html = render("{{ paginator(current=0, total=3) }}");
+        assert!(!html.contains("pagination-prev"));
+        assert!(html.contains("pagination-current\" aria-current=\"page\">1</span>"));
+        let last = render("{{ paginator(current=3, total=3) }}");
+        assert!(!last.contains("pagination-next"));
+        assert!(last.contains("href=\"?page=2\">Prev"));
+    }
+
+    #[test]
+    fn paginator_helper_custom_text_and_base() {
+        let html = render(
+            r#"{{ paginator(current=2, total=2, base="/list?p=", prev_text="«", next_text="»") }}"#,
+        );
+        assert!(html.contains(r#"href="/list?p=1">«"#));
+        assert!(!html.contains("pagination-next"));
+    }
+
+    #[test]
+    fn toc_helper_extracts_headings() {
+        assert_eq!(
+            render(r#"{{ toc(content='# One\n\n## Two\n\n### Three') }}"#),
+            r##"<nav class="toc" aria-label="Table of contents"><ul><li class="toc-level-1"><a href="#one">One</a></li><li class="toc-level-2"><a href="#two">Two</a></li><li class="toc-level-3"><a href="#three">Three</a></li></ul></nav>"##
+        );
+    }
+
+    #[test]
+    fn toc_helper_respects_max_level() {
+        assert_eq!(
+            render(r#"{{ toc(content='# One\n\n## Two', max_level=1) }}"#),
+            r##"<nav class="toc" aria-label="Table of contents"><ul><li class="toc-level-1"><a href="#one">One</a></li></ul></nav>"##
+        );
+    }
+
+    #[test]
+    fn toc_helper_slugifies_and_strips_markup() {
+        let html = render(r#"{{ toc(content='## Hello, World!\n\n### Install `tless`') }}"#);
+        assert!(html.contains(r##"href="#hello-world">Hello, World!"##));
+        assert!(html.contains(r##"href="#install-tless">Install tless"##));
+    }
+
+    #[test]
+    fn toc_helper_returns_empty_without_headings() {
+        assert_eq!(render(r#"{{ toc(content="plain text only") }}"#), "");
+        // rendered HTML contains no markdown headings either
+        assert_eq!(render(r#"{{ toc(content='<h2>Already HTML</h2>') }}"#), "");
+    }
+
+    #[test]
+    fn toc_helper_escapes_heading_text() {
+        let html = render(r#"{{ toc(content='## A & B') }}"#);
+        assert!(html.contains("A &amp; B"));
+    }
+
+    #[test]
+    fn parse_datetime_accepts_rfc3339_and_cli_format() {
+        // both formats describe 2026-09-01T12:00:00Z
+        let expected = 1788264000;
+        assert_eq!(
+            parse_datetime("2026-09-01T12:00:00Z").unwrap().timestamp(),
+            expected
+        );
+        assert_eq!(
+            parse_datetime("2026-09-01 12:00:00").unwrap().timestamp(),
+            expected
+        );
+        assert!(parse_datetime("garbage").is_none());
+    }
+
+    #[test]
+    fn join_url_avoids_duplicate_slashes() {
+        assert_eq!(join_url("https://x.com/", "/a"), "https://x.com/a");
+        assert_eq!(join_url("https://x.com", "/a"), "https://x.com/a");
+        assert_eq!(join_url("https://x.com", "a"), "https://x.com/a");
+        assert!(is_absolute_url("https://x.com"));
+        assert!(is_absolute_url("http://x.com"));
+        assert!(!is_absolute_url("/a"));
+        assert!(!is_absolute_url("a"));
+    }
+
+    #[test]
+    fn slugify_normalizes_into_ascii_slugs() {
+        assert_eq!(slugify("Hello, World!"), "hello-world");
+        assert_eq!(slugify("a---b"), "a-b");
+        assert_eq!(slugify("-x-"), "x");
+        assert_eq!(slugify("café au lait"), "caf-au-lait");
+        assert_eq!(slugify(""), "");
+    }
+
+    #[test]
+    fn format_number_with_separator_groups_integer_part() {
+        assert_eq!(format_number_with_separator("1234567", ","), "1,234,567");
+        assert_eq!(format_number_with_separator("1234567", "."), "1.234.567");
+        assert_eq!(format_number_with_separator("-1234.5", ","), "-1,234.5");
+        assert_eq!(format_number_with_separator("123.456", ","), "123.456");
+        assert_eq!(format_number_with_separator("", ","), "0");
+        assert_eq!(format_number_with_separator("42", ","), "42");
+    }
+
+    #[test]
+    fn escape_helpers_encode_html_specials() {
+        assert_eq!(escape_html_attr("a&b\"c<d>e"), "a&amp;b&quot;c&lt;d&gt;e");
+        assert_eq!(escape_html_text("a&b<c>"), "a&amp;b&lt;c&gt;");
+    }
+
+    #[test]
+    fn build_tag_map_values_are_escaped_and_prefixed() {
+        let mut attrs = BTreeMap::new();
+        attrs.insert("href".to_string(), Value::from("x\"y"));
+        attrs.insert("title".to_string(), Value::from("hi"));
+        let val = Value::from(attrs);
+        let html = build_tag("a", "href", &[], &val).unwrap();
+        // values are stored in a hash map, so check per attribute
+        assert!(html.starts_with("<a "));
+        assert!(html.contains(r#"href="/x&quot;y""#));
+        assert!(html.contains(r#"title="hi""#));
+        assert!(html.ends_with('>'));
+    }
+
+    #[test]
+    fn build_tag_rejects_non_string_or_map_values() {
+        assert!(build_tag("a", "href", &[], &Value::from(42)).is_err());
+    }
+
+    #[test]
+    fn dynamic_to_value_converts_primitives() {
+        assert_eq!(dynamic_to_value(Dynamic::from_int(42)), Value::from(42));
+        assert_eq!(dynamic_to_value(Dynamic::from_float(1.5)), Value::from(1.5));
+        assert_eq!(
+            dynamic_to_value(Dynamic::from_bool(true)),
+            Value::from(true)
+        );
+        assert_eq!(
+            dynamic_to_value(Dynamic::from("hello".to_string())),
+            Value::normal_string("hello")
+        );
+        assert_eq!(dynamic_to_value(Dynamic::UNIT), Value::none());
+    }
+
+    #[test]
+    fn dynamic_to_value_converts_arrays_and_maps() {
+        let arr = Dynamic::from_array(vec![
+            Dynamic::from_int(1),
+            Dynamic::from_float(2.5),
+            Dynamic::from_bool(false),
+        ]);
+        let value = dynamic_to_value(arr);
+        assert_eq!(value.as_array().unwrap().len(), 3);
+        assert_eq!(value.as_array().unwrap()[0], Value::from(1));
+
+        let mut map = RhaiMap::new();
+        map.insert("count".into(), Dynamic::from_int(3));
+        let value = dynamic_to_value(Dynamic::from_map(map));
+        assert_eq!(value.as_map().unwrap().len(), 1);
+        assert_eq!(
+            value.as_map().unwrap().get(&tera::value::Key::Str("count")),
+            Some(&Value::from(3))
+        );
+    }
 }

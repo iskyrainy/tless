@@ -602,7 +602,7 @@ fn base_archive_theme_text() -> String {
             </header>
             <details class="toc" open>
                 <summary>Table of contents</summary>
-                {{{{ toc(content=content, max_level=3) | safe }}}}
+                {{{{ toc(content=markdown, max_level=3) | safe }}}}
             </details>
             <div class="prose">{{{{ content | safe }}}}</div>
         </article>
