@@ -10,18 +10,18 @@ use std::{
     path::Path,
     sync::{Arc, LazyLock},
 };
-use tera::{Function, Map, Number, Result, Tera, Value, to_value};
+use tera::{Context, Function, Kwargs, Map, Number, State, Tera, TeraResult, Value};
 use tracing::info;
 
 use crate::server::{CONFIG, SITE, TERA};
 
-trait CloneableFunction: Function + Send + Sync {
+trait CloneableFunction: Function<TeraResult<Value>> + Send + Sync {
     fn clone_box(&self) -> Box<dyn CloneableFunction>;
 }
 
 impl<T> CloneableFunction for T
 where
-    T: 'static + Function + Send + Sync + Clone,
+    T: 'static + Function<TeraResult<Value>> + Send + Sync + Clone,
 {
     fn clone_box(&self) -> Box<dyn CloneableFunction> {
         Box::new(self.clone())
@@ -72,7 +72,7 @@ impl Helpers {
 
     pub fn register<F>(&mut self, name: &str, f: F)
     where
-        F: Function + Send + Sync + Clone + 'static,
+        F: Function<TeraResult<Value>> + Send + Sync + Clone + 'static,
     {
         self.funcs.insert(name.to_string(), Box::new(f));
     }
@@ -80,14 +80,14 @@ impl Helpers {
     pub fn apply_to(&self, tera: &mut Tera) {
         for (name, func) in &self.funcs {
             let f_clone = func.clone();
-            tera.register_function(name, move |args: &HashMap<String, Value>| {
-                f_clone.call(args)
+            tera.register_function(name, move |args, state: &State| -> TeraResult<Value> {
+                f_clone.call(args, state)
             });
         }
     }
 }
 
-static HELPER: LazyLock<ArcSwap<Helpers>> = LazyLock::new(|| {
+pub(crate) static HELPER: LazyLock<ArcSwap<Helpers>> = LazyLock::new(|| {
     let helpers = Helpers::new();
     ArcSwap::from_pointee(helpers)
 });
@@ -163,8 +163,8 @@ macro_rules! match_value_or_default {
 #[derive(Clone)]
 struct DateHelper;
 
-impl Function for DateHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> tera::Result<Value> {
+impl Function<TeraResult<Value>> for DateHelper {
+    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
         let ts = match args.get("ts") {
             Some(Value::Number(n)) => n.as_i64().unwrap_or_else(|| Utc::now().timestamp()),
             Some(Value::String(s)) => parse_datetime(s).unwrap_or_else(Utc::now).timestamp(),
@@ -189,14 +189,27 @@ struct TagHelper {
     path_attr: String,
 }
 
-impl Function for TagHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
+impl TagHelper {
+    fn new(tag: &str, path_attr: &str, defaults: &[(&str, &str)]) -> Self {
+        TagHelper {
+            tag: tag.to_string(),
+            path_attr: path_attr.to_string(),
+            default_attrs: defaults
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl Function<TeraResult<Value>> for TagHelper {
+    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
         fn build_tag(
             tag: &str,
             default_attrs: &HashMap<String, String>,
             path_attr: &str,
             val: &Value,
-        ) -> Result<String> {
+        ) -> TeraResult<String> {
             let mut html = String::new();
             if let Some(s) = val.as_str() {
                 let mut path = s.to_string();
@@ -263,24 +276,13 @@ impl Function for TagHelper {
     }
 }
 
-fn make_tag_helper(tag: &str, path_attr: &str, defaults: &[(&str, &str)]) -> TagHelper {
-    TagHelper {
-        tag: tag.to_string(),
-        path_attr: path_attr.to_string(),
-        default_attrs: defaults
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect(),
-    }
-}
-
 macro_rules! define_tag_helper {
     ($name:ident, $tag:expr, $path_attr:expr, { $($k:expr => $v:expr),* }) => {
         #[derive(Clone)]
         struct $name;
-        impl Function for $name {
-            fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
-                let helper = make_tag_helper($tag, $path_attr, &[ $(($k, $v)),* ]);
+        impl Function<TeraResult<Value>> for $name {
+            fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
+                let helper = TagHelper::new($tag, $path_attr, &[ $(($k, $v)),* ]);
                 helper.call(args)
             }
         }
@@ -300,8 +302,8 @@ macro_rules! define_url_helper {
     ($name:ident, url) => {
         #[derive(Clone)]
         struct $name;
-        impl Function for $name {
-            fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
+        impl Function<TeraResult<Value>> for $name {
+            fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
                 let site_url = &CONFIG.load().site.url;
                 let path = match_value_or_default!(args.get("path"), Value::String(v) => v);
                 let relative =
@@ -323,25 +325,11 @@ macro_rules! define_url_helper {
     ($name:ident, fullurl) => {
         #[derive(Clone)]
         struct $name;
-        impl Function for $name {
-            fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
+        impl Function<TeraResult<Value>> for $name {
+            fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
                 let site_url = &CONFIG.load().site.url;
                 let path = match_value_or_default!(args.get("path"), Value::String(v) => v);
                 Ok(Value::String(join_url(site_url, path)))
-            }
-        }
-    };
-
-    ($name:ident, gravatar) => {
-        #[derive(Clone)]
-        struct $name;
-        impl Function for $name {
-            fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
-                let mail = match_value_or_default!(args.get("mail"), Value::String(v) => v);
-                let mut hashed_email = Sha256::new();
-                hashed_email.update(mail.trim());
-                let url = format!("https://www.gravatar.com/avatar/{:X}", hashed_email.finalize());
-                Ok(Value::String(url))
             }
         }
     };
@@ -349,13 +337,31 @@ macro_rules! define_url_helper {
 
 define_url_helper!(UrlHelper, url);
 define_url_helper!(FullUrlHelper, fullurl);
-define_url_helper!(GravatarHelper, gravatar);
+
+#[derive(Clone)]
+struct GravatarHelper;
+
+impl Function<TeraResult<Value>> for GravatarHelper {
+    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
+        let mail = match_value_or_default!(args.get("mail"), Value::String(v) => v);
+        let mut hashed_email = Sha256::new();
+        hashed_email.update(mail.trim());
+        let hash: [u8; 32] = hashed_email.finalize().into();
+        let url = format!(
+            "https://www.gravatar.com/avatar/{}",
+            hash.iter()
+                .map(|b| format!("{:02X}", b))
+                .collect::<String>()
+        );
+        Ok(Value::String(url))
+    }
+}
 
 #[derive(Clone)]
 struct PartialHelper;
 
-impl Function for PartialHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
+impl Function<TeraResult<Value>> for PartialHelper {
+    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
         let part_name =
             match_value_or_default!(args.get("name"), Value::String(v) => v, &String::from(""));
         if part_name.is_empty() {
@@ -373,8 +379,8 @@ struct ListHelper {
     list: String,
 }
 
-impl Function for ListHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
+impl Function<TeraResult<Value>> for ListHelper {
+    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
         let orderby = match_value_or_default!(args.get("orderby"), Value::String(v) => v, &String::from("name"));
         let order = match_value_or_default!(args.get("order"), Value::Number(v) => v, 1, |v: &Number| v.as_i64().unwrap_or(1));
         let show_count =
@@ -521,8 +527,8 @@ macro_rules! define_list_helper {
     ($name:ident, $list:expr) => {
         #[derive(Clone)]
         struct $name;
-        impl Function for $name {
-            fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
+        impl Function<TeraResult<Value>> for $name {
+            fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
                 let helper = make_list_helper($list);
                 helper.call(args)
             }
@@ -538,8 +544,8 @@ define_list_helper!(PagesHelper, "page");
 #[derive(Clone)]
 struct PaginatorHelper;
 
-impl Function for PaginatorHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
+impl Function<TeraResult<Value>> for PaginatorHelper {
+    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
         let current = match_value_or_default!(
             args.get("current"),
             Value::Number(v) => v,
@@ -625,8 +631,8 @@ impl Function for PaginatorHelper {
 #[derive(Clone)]
 struct NumberFormatHelper;
 
-impl Function for NumberFormatHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
+impl Function<TeraResult<Value>> for NumberFormatHelper {
+    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
         let value = match args.get("value") {
             Some(Value::Number(n)) => n
                 .as_i64()
@@ -651,8 +657,8 @@ impl Function for NumberFormatHelper {
 #[derive(Clone)]
 struct OpenGraphHelper;
 
-impl Function for OpenGraphHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
+impl Function<TeraResult<Value>> for OpenGraphHelper {
+    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
         let config = CONFIG.load();
         let title = match_value_or_default!(
             args.get("title"),
@@ -707,8 +713,8 @@ impl Function for OpenGraphHelper {
 #[derive(Clone)]
 struct TocHelper;
 
-impl Function for TocHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
+impl Function<TeraResult<Value>> for TocHelper {
+    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
         let content = match_value_or_default!(args.get("content"), Value::String(v) => v);
         let max_level = match_value_or_default!(
             args.get("max_level"),
@@ -884,8 +890,8 @@ fn value_to_dynamic(v: &Value) -> Dynamic {
     }
 }
 
-impl Function for RhaiHelper {
-    fn call(&self, args: &HashMap<String, Value>) -> Result<Value> {
+impl Function<TeraResult<Value>> for RhaiHelper {
+    fn call(&self, args: &HashMap<String, Value>) -> TeraResult<Value> {
         let mut scope = rhai::Scope::new();
         let mut arg_map = RhaiMap::new();
         for (k, v) in args {
@@ -935,7 +941,7 @@ impl Function for RhaiHelper {
     }
 }
 
-pub(crate) fn load_rhai_helpers(helpers_dir: impl AsRef<Path>) -> Result<()> {
+pub(crate) fn load_rhai_helpers(helpers_dir: impl AsRef<Path>) -> TeraResult<()> {
     let dir = helpers_dir.as_ref();
     if !dir.exists() {
         return Ok(());
