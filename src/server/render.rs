@@ -93,7 +93,7 @@ pub(crate) async fn render_to_file(events_path: &[PathBuf]) -> std::io::Result<(
 }
 
 /// Render all posts and pages to public dir.
-pub(crate) async fn render_all() -> std::io::Result<()> {
+pub async fn render_all() -> std::io::Result<()> {
     let site = SITE.load();
     let mut paths = site
         .posts

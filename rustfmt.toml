@@ -1,0 +1,10 @@
+# --- Imports ----------------------------------------------------------------
+reorder_imports            = true          # Alphabetise & group `use` items.
+
+# --- Readability ------------------------------------------------------------
+max_width                  = 100           # Hard column limit for all code
+use_field_init_shorthand   = true          # `{ x, y }` instead of `{ x: x, y: y }`
+
+# --- Misc -------------------------------------------------------------------
+edition                    = "2024"        # Controls the edition of the Rust Style Guide
+                                           # to use for formatting (RFC 3338)

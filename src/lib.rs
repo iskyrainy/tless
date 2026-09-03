@@ -6,7 +6,6 @@ pub mod cmd;
 pub mod error;
 pub(crate) mod file;
 pub(crate) mod server;
-pub(crate) mod site;
 
 /// Working directory the application runs from.
 pub(crate) static BASE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {

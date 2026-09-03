@@ -4,12 +4,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use tracing::info;
 
-use crate::{
-    error::AppError,
-    file::{blog, page},
-    server::run,
-    site,
-};
+use crate::{error::AppError, file, server};
 
 /// tless command arguments
 #[derive(Parser, Debug)]
@@ -193,7 +188,7 @@ fn handle_server(server: Server) -> Result<()> {
         bail!("tless.toml not found in current directory");
     }
     if server.run && (1025..=65534).contains(&server.port) {
-        run::run(server.port).context("Failed to start server")?;
+        server::run(server.port).context("Failed to start server")?;
     } else {
         bail!("Server not started. Use -r to run the server. Port must be between 1025 and 65534.");
     }
@@ -202,27 +197,33 @@ fn handle_server(server: Server) -> Result<()> {
 
 fn handle_blog(blog: Blog) -> Result<()> {
     match &blog.cli {
-        BlogArgs::Add { name } => blog::add_blog(name).context("Failed to add blog"),
+        BlogArgs::Add { name } => file::add_blog(name).context("Failed to add blog"),
         BlogArgs::Remove { class, name } => {
-            blog::remove_blog(name, class).context("Failed to remove blog")
+            file::remove_blog(name, class).context("Failed to remove blog")
         }
-        BlogArgs::Publish { name } => blog::publish_blog(name).context("Failed to publish blog"),
+        BlogArgs::Publish { name } => file::publish_blog(name).context("Failed to publish blog"),
     }
 }
 
 fn handle_page(page: Page) -> Result<()> {
     match &page.cli {
-        PageArgs::Add { name } => page::add_page(name).context("Failed to add page"),
-        PageArgs::Remove { name } => page::remove_page(name).context("Failed to remove page"),
+        PageArgs::Add { name } => file::add_page(name).context("Failed to add page"),
+        PageArgs::Remove { name } => file::remove_page(name).context("Failed to remove page"),
     }
 }
 
 fn handle_site(site: Site) -> Result<()> {
     if site.init {
         info!("Initializing site structure...");
-        site::init().context("Failed to initialize site structure")
+        server::init().context("Failed to initialize site structure")?;
+        info!("Finish site structure...");
+        Ok(())
     } else if site.generate {
         info!("Generating static pages...");
+        tokio::runtime::Handle::current()
+            .block_on(server::render_all())
+            .context("Failed to generate static pages")?;
+        info!("Generated static pages");
         Ok(())
     } else if site.deploy {
         info!("Deploying site to GitHub Pages...");

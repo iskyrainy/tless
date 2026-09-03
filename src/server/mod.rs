@@ -21,9 +21,15 @@ use crate::{
     file::{Metadata, parse_file},
 };
 
+mod deploy;
 mod helper;
 mod render;
-pub(crate) mod run;
+mod run;
+mod site;
+
+pub use render::render_all;
+pub use run::run;
+pub use site::init;
 
 /// Configuration structure for the application.
 #[derive(Clone, Debug, Deserialize, Serialize)]

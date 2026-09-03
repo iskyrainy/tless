@@ -13,8 +13,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::BASE_DIR;
 
-pub mod blog;
-pub mod page;
+mod blog;
+mod page;
+
+pub use blog::{add_blog, remove_blog, publish_blog};
+pub use page::{add_page, remove_page};
 
 /// Metadata parsed from a source file's frontmatter.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
