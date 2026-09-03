@@ -16,7 +16,7 @@ use crate::BASE_DIR;
 mod blog;
 mod page;
 
-pub use blog::{add_blog, remove_blog, publish_blog};
+pub use blog::{add_blog, publish_blog, remove_blog};
 pub use page::{add_page, remove_page};
 
 /// Metadata parsed from a source file's frontmatter.
@@ -27,7 +27,6 @@ pub struct Metadata {
     pub layout: Option<String>,
     pub tags: Option<Vec<String>>,
     pub categories: Option<Vec<String>>,
-    pub prva: bool,
     pub path: PathBuf,
 }
 
@@ -108,9 +107,6 @@ pub fn parse_file(path: PathBuf) -> Result<Metadata> {
             .filter_map(|c| c.as_str().map(|s| s.to_string()))
             .collect();
         metadata.categories = Some(category_list);
-    }
-    if let Some(prva) = frontmatter.get("prva").and_then(|v| v.as_bool()) {
-        metadata.prva = prva;
     }
     Ok(metadata)
 }

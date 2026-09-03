@@ -1,16 +1,16 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::BufReader,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
 
 use arc_swap::ArcSwap;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use data_encoding::HEXUPPER;
 use futures::{StreamExt, stream};
 use pulldown_cmark::{Options, Parser, html};
 use ring::digest::{self, SHA256};
-use serde::{Deserialize, Serialize};
 use tera::Context;
 use tokio::{
     fs::{self, File},
@@ -20,7 +20,7 @@ use tracing::{error, info};
 
 use crate::{
     file,
-    server::{SITE, TERA, get_public_path},
+    server::{SITE, Site, TERA, get_layout_path, get_public_path, get_source_path},
 };
 
 /// Markdown default render options.
@@ -92,9 +92,11 @@ pub(crate) async fn render_to_file(events_path: &[PathBuf]) -> std::io::Result<(
     Ok(())
 }
 
-/// Render all posts and pages to public dir.
+/// Render the whole site to the public dir: every post and page, the home
+/// page, and the active theme's static resources.
 pub async fn render_all() -> std::io::Result<()> {
     let site = SITE.load();
+    remove_stale_outputs(&site).await;
     let mut paths = site
         .posts
         .iter()
@@ -108,26 +110,127 @@ pub async fn render_all() -> std::io::Result<()> {
             .collect::<Vec<_>>(),
     );
     render_to_file(&paths).await?;
+    render_home(&site).await?;
+    copy_theme_resources()?;
     Ok(())
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct HashValue {
-    path: String,
-    hash: String,
+/// Remove public files whose source was deleted, keeping the deployed site
+/// in sync with the sources.
+async fn remove_stale_outputs(site: &Site) {
+    let current: HashSet<String> = site
+        .posts
+        .iter()
+        .chain(site.pages.iter())
+        .map(|m| m.path.to_string_lossy().to_string())
+        .collect();
+    let post_hash = POST_HASH.load();
+    let stale: Vec<String> = post_hash
+        .keys()
+        .filter(|path| !current.contains(*path))
+        .cloned()
+        .collect();
+    if stale.is_empty() {
+        return;
+    }
+
+    let mut map = (**post_hash).clone();
+    for path_str in stale {
+        map.remove(&path_str);
+        let Some(stem) = Path::new(&path_str).file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let out = get_public_path(stem);
+        match fs::remove_file(&out).await {
+            Ok(()) => info!("Removed stale output: {}", out.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => error!("Failed to remove stale output {}: {}", out.display(), e),
+        }
+    }
+    POST_HASH.store(Arc::new(map));
+}
+
+/// Render the theme's `index.html` layout as the site home page.
+async fn render_home(site: &Site) -> std::io::Result<()> {
+    let tera = TERA.load();
+    if !tera
+        .get_template_names()
+        .any(|name| name == "index.html" || name == "index")
+    {
+        info!("No index.html layout found, skipping home page");
+        return Ok(());
+    }
+    let mut context = Context::new();
+    // an empty content keeps `{% if content %}` blocks in the layout happy
+    context.insert("content", "");
+    context.insert("posts", &recent_posts(site));
+    match tera.render("index.html", &context) {
+        Ok(rendered) => {
+            fs::write(get_public_path("index.html"), rendered).await?;
+            info!("Rendered index");
+        }
+        Err(e) => error!("Failed to render home page: {}", e),
+    }
+    Ok(())
+}
+
+/// Posts from `source/post`, newest first, exposed to the home page template.
+fn recent_posts(site: &Site) -> Vec<file::Metadata> {
+    let post_dir = get_source_path("post");
+    let mut posts: Vec<file::Metadata> = site
+        .posts
+        .iter()
+        .filter(|m| m.path.starts_with(&post_dir))
+        .cloned()
+        .collect();
+    posts.sort_by_key(|p| std::cmp::Reverse(date_rank(&p.date)));
+    posts
+}
+
+/// Parse a frontmatter date (RFC3339 or the CLI `%Y-%m-%d %H:%M:%S` format);
+/// posts without a usable date sort last.
+fn date_rank(date: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(date)
+        .map(|d| d.with_timezone(&Utc))
+        .ok()
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(date, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|d| d.and_utc())
+        })
+        .unwrap_or(DateTime::<Utc>::MIN_UTC)
+}
+
+/// Copy the active theme's `resource/` directory into `public/`.
+pub(crate) fn copy_theme_resources() -> std::io::Result<()> {
+    let resource_dir = get_layout_path().join("resource");
+    if !resource_dir.exists() {
+        return Ok(());
+    }
+    copy_dir_recursive(&resource_dir, &get_public_path("."))
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 static POST_HASH: LazyLock<ArcSwap<HashMap<String, String>>> = LazyLock::new(|| {
-    let mut map = HashMap::new();
     let post_hash = get_public_path(".post_hash.json");
     // The cache file is regenerable: a missing or unreadable file just resets it
-    if let Ok(file) = std::fs::File::open(&post_hash) {
-        let parsed: Vec<HashValue> =
-            serde_json::from_reader(BufReader::new(file)).unwrap_or_default();
-        for hash_value in parsed {
-            map.insert(hash_value.path, hash_value.hash);
-        }
-    }
+    let map = std::fs::File::open(&post_hash)
+        .map(|file| serde_json::from_reader(BufReader::new(file)).unwrap_or_default())
+        .unwrap_or_default();
     ArcSwap::from_pointee(map)
 });
 

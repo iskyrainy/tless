@@ -17,8 +17,10 @@ pub fn add_blog(name: &str) -> Result<()> {
 }
 
 fn base_blog_text() -> String {
+    // empty arrays instead of null values: the frontmatter parser rejects
+    // keys without a value
     format!(
-        "---\ndate: {}\ntags:\ncategories:\n---\n\n# New Blog\nWrite your content here.\n",
+        "---\ndate: {}\ntags: []\ncategories: []\n---\n\n# New Blog\nWrite your content here.\n",
         current_timestamp()
     )
 }

@@ -2,33 +2,44 @@ use std::{env, fs, path::Path};
 
 use anyhow::{Context, Result, bail};
 
-/// Initialize the site structure in the current directory.
+/// Initialize a complete, deploy-ready site scaffold in the current directory.
+///
+/// Everything is created at the repository root: `tless.toml`, the source and
+/// theme directories, plus the `.github/workflows/deploy.yml` and `.gitignore`
+/// needed to publish the site to GitHub Pages.
 pub fn init() -> Result<()> {
     let current_dir = env::current_dir().context("Cannot get current directory")?;
-    let current_dir = current_dir.join("blog");
-    if current_dir.exists() {
-        bail!("Site directory already exists.");
-    }
-    fs::create_dir(&current_dir)?;
-
-    let conf_path = current_dir.join("tless.toml");
-    fs::write(&conf_path, base_config_text())?;
-
-    let dirs = vec!["source", "theme", "public", "plugin", "helper", "statistic"];
-    for dir in dirs {
-        fs::create_dir(current_dir.join(dir))?;
-    }
-    let blog_dirs = vec!["draft", "post", "page"];
-    for dir in blog_dirs {
-        fs::create_dir(current_dir.join("source").join(dir))?;
+    if current_dir.join("tless.toml").exists() {
+        bail!("Site already initialized in this directory");
     }
 
-    let theme_dir = current_dir.join("theme").join("base");
-    fs::create_dir(&theme_dir)?;
-    let layout_dir = theme_dir.join("layout");
-    fs::create_dir(&layout_dir)?;
-    let resource_dir = theme_dir.join("resource");
-    fs::create_dir(&resource_dir)?;
+    fs::write(current_dir.join("tless.toml"), base_config_text())?;
+    fs::write(current_dir.join(".gitignore"), base_gitignore_text())?;
+
+    // Empty directories that must survive in git get a .gitkeep
+    let tracked_dirs = [
+        "helper",
+        "plugin",
+        "source/draft",
+        "source/post",
+        "source/page",
+    ];
+    for dir in tracked_dirs {
+        let dir = current_dir.join(dir);
+        fs::create_dir_all(&dir)?;
+        fs::write(dir.join(".gitkeep"), "")?;
+    }
+    // Build output, ignored by .gitignore
+    fs::create_dir_all(current_dir.join("public"))?;
+
+    let workflows = current_dir.join(".github").join("workflows");
+    fs::create_dir_all(&workflows)?;
+    fs::write(workflows.join("deploy.yml"), base_deploy_yml_text())?;
+
+    let layout_dir = current_dir.join("theme").join("base").join("layout");
+    fs::create_dir_all(&layout_dir)?;
+    let resource_dir = current_dir.join("theme").join("base").join("resource");
+    fs::create_dir_all(resource_dir)?;
     write_base_theme(&layout_dir)?;
     Ok(())
 }
@@ -38,6 +49,71 @@ fn write_base_theme(layout_dir: &Path) -> Result<()> {
     fs::write(layout_dir.join("archive.html"), base_archive_theme_text())?;
     fs::write(layout_dir.join("category.html"), base_category_theme_text())?;
     Ok(())
+}
+
+/// Generate the `.gitignore` for a site repository.
+fn base_gitignore_text() -> &'static str {
+    r#"# Generated build output
+public/
+
+# Editor and OS noise
+.DS_Store
+*.swp
+*~
+"#
+}
+
+/// Generate the GitHub Pages deployment workflow.
+fn base_deploy_yml_text() -> &'static str {
+    r#"name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Point this at your fork of tless if you maintain one
+      - name: Install tless
+        run: cargo install --git https://github.com/iskyrainy/tless --locked
+
+      - name: Build static site
+        run: tless site -g
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+"#
 }
 
 /// Generate a base configuration file content.
@@ -54,16 +130,10 @@ zone = "UTC"
 theme = "base"
 favicon = ""
 menu = [
-    { name = "Home", link = "/" },
+    { name = "Home", link = "/index.html" },
     { name = "Example Post", link = "/archives/hello-tless" },
     { name = "Rust Tag", link = "/tags/rust" },
     { name = "General Category", link = "/categories/general" }
-]
-
-[auth]
-ak = ""
-allows = [
-    "127.0.0.1"
 ]
 "#,
     )
@@ -71,32 +141,52 @@ allows = [
 
 fn base_style_text() -> &'static str {
     r#"
+        /* PaperMod-inspired palette */
         :root {
-            color-scheme: light dark;
-            --bg: #fafafa;
-            --surface: #ffffff;
-            --border: #e4e4e7;
-            --text: #18181b;
-            --muted: #71717a;
-            --accent: #0d9488;
-            --accent-strong: #0f766e;
-            --accent-soft: rgba(13, 148, 136, 0.1);
-            --on-accent: #ffffff;
-            --radius: 12px;
-            --max: 720px;
+            color-scheme: light;
+            --gap: 24px;
+            --content-gap: 20px;
+            --nav-width: 1024px;
+            --main-width: 720px;
+            --header-height: 60px;
+            --radius: 8px;
+
+            --theme: #ffffff;
+            --entry: #ffffff;
+            --primary: #1e1e1e;
+            --secondary: #6c6c6c;
+            --tertiary: #d6d6d6;
+            --content: #1f1f1f;
+            --code-bg: #f5f5f5;
+            --code-block-bg: #1c1d21;
+            --border: #eeeeee;
+        }
+
+        html[data-theme="dark"] {
+            color-scheme: dark;
+            --theme: #1d1e20;
+            --entry: #2e2e33;
+            --primary: rgb(218 218 219);
+            --secondary: rgb(155 156 157);
+            --tertiary: rgb(65 66 68);
+            --content: rgb(196 196 197);
+            --code-bg: #37383e;
+            --code-block-bg: #2e2e33;
+            --border: #333333;
         }
 
         @media (prefers-color-scheme: dark) {
-            :root {
-                --bg: #101012;
-                --surface: #18181b;
-                --border: #27272a;
-                --text: #f4f4f5;
-                --muted: #a1a1aa;
-                --accent: #2dd4bf;
-                --accent-strong: #5eead4;
-                --accent-soft: rgba(45, 212, 191, 0.12);
-                --on-accent: #101012;
+            html:not([data-theme="light"]) {
+                color-scheme: dark;
+                --theme: #1d1e20;
+                --entry: #2e2e33;
+                --primary: rgb(218 218 219);
+                --secondary: rgb(155 156 157);
+                --tertiary: rgb(65 66 68);
+                --content: rgb(196 196 197);
+                --code-bg: #37383e;
+                --code-block-bg: #2e2e33;
+                --border: #333333;
             }
         }
 
@@ -104,24 +194,24 @@ fn base_style_text() -> &'static str {
             box-sizing: border-box;
         }
 
+        html {
+            scroll-behavior: smooth;
+        }
+
         body {
             margin: 0;
-            background: var(--bg);
-            color: var(--text);
-            font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            line-height: 1.7;
+            background: var(--theme);
+            color: var(--content);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+            font-size: 16px;
+            line-height: 1.75;
             -webkit-font-smoothing: antialiased;
+            overflow-wrap: break-word;
             transition: background-color 0.3s ease, color 0.3s ease;
         }
 
-        @media (prefers-reduced-motion: reduce) {
-            body {
-                transition: none;
-            }
-        }
-
         a {
-            color: var(--accent-strong);
+            color: var(--primary);
             text-decoration: none;
         }
 
@@ -129,323 +219,396 @@ fn base_style_text() -> &'static str {
             text-decoration: underline;
         }
 
-        .container {
-            max-width: var(--max);
-            margin: 0 auto;
-            padding: 0 24px;
-        }
-
-        /* Header */
-        .site-header {
-            position: sticky;
-            top: 0;
-            z-index: 10;
-            background: color-mix(in srgb, var(--bg) 85%, transparent);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            border-bottom: 1px solid var(--border);
-        }
-
-        .header-inner {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 8px 24px;
-            padding-top: 14px;
-            padding-bottom: 14px;
-        }
-
-        .site-logo {
-            font-size: 1.1rem;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-            color: var(--text);
-        }
-
-        .site-logo:hover {
-            text-decoration: none;
-            opacity: 0.8;
-        }
-
-        .site-nav {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px 18px;
-            font-size: 0.9rem;
-        }
-
-        .site-nav a {
-            color: var(--muted);
-            transition: color 0.2s;
-        }
-
-        .site-nav a:hover {
-            color: var(--text);
-            text-decoration: none;
-        }
-
-        /* Main */
-        main {
-            padding: 48px 0 80px;
-        }
-
-        .page-header {
-            margin: 0 0 36px;
-        }
-
-        .page-title {
-            margin: 0 0 8px;
-            font-size: clamp(1.9rem, 4vw, 2.5rem);
-            font-weight: 700;
-            letter-spacing: -0.03em;
-            line-height: 1.2;
-        }
-
-        .page-description {
-            margin: 0;
-            color: var(--muted);
-            font-size: 1.02rem;
-        }
-
-        /* Cards */
-        .card {
-            padding: 28px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-        }
-
-        .section-content {
-            margin-bottom: 20px;
-        }
-
-        .section-title {
-            margin: 0 0 16px;
-            font-size: 1rem;
-            font-weight: 600;
-            letter-spacing: -0.01em;
-        }
-
-        /* Post list rendered by the list_* helpers */
-        .post-list-wrap .ul {
-            list-style: none;
-            margin: 0;
-            padding: 0;
-        }
-
-        .post-list-wrap .li + .li {
-            border-top: 1px solid var(--border);
-        }
-
-        .post-list-wrap .a {
-            display: block;
-            padding: 15px 0;
-            color: var(--text);
-            font-size: 1.02rem;
-            font-weight: 500;
-            letter-spacing: -0.01em;
-        }
-
-        .post-list-wrap .a:hover {
-            color: var(--accent-strong);
-            text-decoration: none;
-        }
-
-        .post-list-wrap .count {
-            color: var(--muted);
-            font-size: 0.8rem;
-            margin-left: 4px;
-        }
-
-        /* Inline taxonomy links */
-        .taxonomy-wrap .a {
-            display: inline-block;
-            margin: 0 6px 8px 0;
-            padding: 3px 12px;
-            border: 1px solid var(--border);
-            border-radius: 999px;
-            font-size: 0.875rem;
-            color: var(--text);
-            background: var(--surface);
-            transition: border-color 0.2s, color 0.2s;
-        }
-
-        .taxonomy-wrap .a:hover {
-            border-color: var(--accent);
-            color: var(--accent-strong);
-            text-decoration: none;
-        }
-
-        .taxonomy-wrap .count {
-            color: var(--muted);
-            font-size: 0.8rem;
-            margin-left: 2px;
-        }
-
-        .taxonomy-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            margin-top: 20px;
-        }
-
-        /* Table of contents */
-        .toc {
-            margin-bottom: 28px;
-            padding: 14px 18px;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            background: var(--surface);
-        }
-
-        .toc summary {
-            cursor: pointer;
-            font-size: 0.875rem;
-            font-weight: 600;
-            color: var(--muted);
-            user-select: none;
-        }
-
-        .toc ul {
-            list-style: none;
-            margin: 10px 0 0;
-            padding: 0 0 0 14px;
-            border-left: 1px solid var(--border);
-        }
-
-        .toc li + li {
-            margin-top: 6px;
-        }
-
-        .toc a {
-            font-size: 0.875rem;
-            color: var(--muted);
-        }
-
-        .toc a:hover {
-            color: var(--accent-strong);
-            text-decoration: none;
-        }
-
-        /* Article content */
-        .prose {
-            font-size: 1.05rem;
-        }
-
-        .prose h1, .prose h2, .prose h3, .prose h4 {
-            margin: 2.2rem 0 1rem;
-            letter-spacing: -0.02em;
+        h1, h2, h3, h4 {
+            color: var(--primary);
             line-height: 1.3;
         }
 
-        .prose h1 {
-            font-size: 1.6rem;
+        /* Header */
+        .nav {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            background: var(--theme);
+            border-bottom: 1px solid var(--border);
+            transition: background-color 0.3s ease;
         }
 
-        .prose h2 {
-            font-size: 1.4rem;
+        .nav-inner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            max-width: var(--nav-width);
+            height: var(--header-height);
+            margin: 0 auto;
+            padding: 0 var(--gap);
         }
 
-        .prose h3 {
-            font-size: 1.2rem;
+        .site-name {
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
         }
 
-        .prose p {
-            margin: 0 0 1.2rem;
+        .site-name a {
+            color: var(--primary);
         }
 
-        .prose a {
+        .site-name a:hover {
+            text-decoration: none;
+        }
+
+        .nav-links {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            font-size: 14px;
+        }
+
+        .nav-links a {
+            color: var(--primary);
+            white-space: nowrap;
+        }
+
+        .nav-links a:hover {
             text-decoration: underline;
-            text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
-            text-underline-offset: 3px;
+            text-underline-offset: 4px;
         }
 
-        .prose a:hover {
-            text-decoration-color: var(--accent);
-        }
-
-        .prose img {
-            max-width: 100%;
+        /* Theme toggle */
+        .theme-toggle {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 34px;
+            height: 34px;
+            padding: 0;
+            border: none;
             border-radius: var(--radius);
+            background: transparent;
+            color: var(--primary);
+            cursor: pointer;
         }
 
-        .prose blockquote {
-            margin: 1.5rem 0;
-            padding: 2px 0 2px 18px;
-            border-left: 3px solid var(--accent);
-            color: var(--muted);
+        .theme-toggle:hover {
+            background: var(--code-bg);
         }
 
-        .prose pre {
-            overflow-x: auto;
-            padding: 16px 20px;
+        .icon-sun {
+            display: none;
+        }
+
+        html[data-theme="dark"] .icon-moon {
+            display: none;
+        }
+
+        html[data-theme="dark"] .icon-sun {
+            display: block;
+        }
+
+        /* Main column */
+        .main {
+            max-width: var(--main-width);
+            margin: 0 auto;
+            padding: var(--gap) var(--gap) 0;
+        }
+
+        .recent-title {
+            margin: var(--content-gap) 0;
+            font-size: 17px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--secondary);
+        }
+
+        /* Entry cards (home list) */
+        .post-entry {
+            position: relative;
+            margin-bottom: var(--gap);
+            padding: var(--gap);
+            background: var(--entry);
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            background: var(--surface);
+            transition: transform 0.25s ease, border-color 0.25s ease;
+        }
+
+        .post-entry:hover {
+            transform: translateY(-2px);
+            border-color: var(--tertiary);
+        }
+
+        .entry-header h2 {
+            margin: 0;
+            font-size: 24px;
+            line-height: 1.3;
+        }
+
+        .entry-header a:hover {
+            text-decoration: underline;
+            text-underline-offset: 4px;
+        }
+
+        .entry-footer {
+            display: flex;
+            align-items: baseline;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 10px;
+            color: var(--secondary);
+            font-size: 13px;
+        }
+
+        .entry-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .entry-tags span {
+            color: var(--secondary);
+        }
+
+        /* Single post */
+        .post-title {
+            margin: var(--content-gap) 0 0;
+            font-size: 40px;
+            line-height: 1.2;
+        }
+
+        .post-meta {
+            margin-top: 6px;
+            color: var(--secondary);
+            font-size: 14px;
+        }
+
+        /* Table of contents */
+        details.toc {
+            margin: var(--content-gap) 0;
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+        }
+
+        details.toc summary {
+            padding: 0.3rem 1.2rem;
+            border-radius: var(--radius);
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--secondary);
+            user-select: none;
+        }
+
+        details.toc ul {
+            list-style: none;
+            margin: 0;
+            padding: 0.4rem 1.2rem 0.8rem 2.2rem;
+            border-top: 1px solid var(--border);
+        }
+
+        details.toc li {
+            font-size: 14px;
+            line-height: 1.9;
+        }
+
+        details.toc a {
+            color: var(--secondary);
+        }
+
+        details.toc a:hover {
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        /* Post content */
+        .post-content {
+            margin: 30px 0;
+            color: var(--content);
+            font-size: 16px;
+            line-height: 1.75;
+        }
+
+        .post-content > :first-child {
+            margin-top: 0;
+        }
+
+        .post-content h1, .post-content h2, .post-content h3, .post-content h4 {
+            margin: 2em 0 1em;
+        }
+
+        .post-content h1 {
+            font-size: 1.6em;
+        }
+
+        .post-content h2 {
+            font-size: 1.4em;
+        }
+
+        .post-content h3 {
+            font-size: 1.2em;
+        }
+
+        .post-content p {
+            margin: 1em 0;
+        }
+
+        .post-content a {
+            text-decoration: underline;
+            text-decoration-color: var(--tertiary);
+            text-underline-offset: 0.2em;
+        }
+
+        .post-content a:hover {
+            text-decoration-color: var(--secondary);
+        }
+
+        .post-content img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+        }
+
+        .post-content blockquote {
+            margin: 1.5em 0;
+            padding: 0 1em;
+            border-left: 2px solid var(--tertiary);
+            color: var(--secondary);
+        }
+
+        .post-content hr {
+            margin: 2em 0;
+            border: none;
+            border-top: 1px solid var(--border);
+        }
+
+        .post-content pre {
+            overflow-x: auto;
+            padding: 16px 20px;
+            background: var(--code-block-bg);
+            border-radius: var(--radius);
+            color: #e8e8e8;
             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-            font-size: 0.9rem;
+            font-size: 14px;
             line-height: 1.6;
         }
 
-        .prose code {
-            padding: 2px 6px;
+        .post-content code {
+            padding: 2px 5px;
+            background: var(--code-bg);
             border-radius: 4px;
-            background: var(--accent-soft);
             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-            font-size: 0.88em;
+            font-size: 0.9em;
         }
 
-        .prose pre code {
+        .post-content pre code {
             padding: 0;
             background: none;
             font-size: 1em;
         }
 
-        .prose hr {
-            margin: 2.5rem 0;
-            border: none;
-            border-top: 1px solid var(--border);
+        .post-content ul, .post-content ol {
+            padding-left: 1.6em;
         }
 
-        .prose ul, .prose ol {
-            padding-left: 1.4rem;
+        .post-content li {
+            margin: 0.3em 0;
         }
 
-        .prose li {
-            margin: 0.3rem 0;
-        }
-
-        .prose table {
+        .post-content table {
             width: 100%;
-            margin: 1.5rem 0;
+            margin: 1.5em 0;
             border-collapse: collapse;
-            font-size: 0.95rem;
+            font-size: 0.95em;
         }
 
-        .prose th, .prose td {
+        .post-content th, .post-content td {
             padding: 8px 12px;
             border: 1px solid var(--border);
             text-align: left;
         }
 
-        .prose th {
-            background: var(--surface);
+        .post-content th {
+            background: var(--code-bg);
+            color: var(--primary);
             font-weight: 600;
         }
 
-        /* Pagination */
+        /* Helper list rows (taxonomy pages) */
+        .entry-list .ul {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        .entry-list .li {
+            border-bottom: 1px solid var(--border);
+        }
+
+        .entry-list .a {
+            display: block;
+            padding: 14px 4px;
+            color: var(--primary);
+            font-size: 17px;
+        }
+
+        .entry-list .a:hover {
+            text-decoration: underline;
+            text-underline-offset: 4px;
+        }
+
+        /* Taxonomy pills */
+        .taxonomy-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: var(--gap);
+            margin: var(--gap) 0 calc(var(--gap) * 2);
+        }
+
+        .taxonomy-card h2 {
+            margin: 0 0 12px;
+            font-size: 16px;
+            color: var(--secondary);
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .taxonomy-pills .a {
+            display: inline-block;
+            margin: 0 6px 8px 0;
+            padding: 0 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--code-bg);
+            color: var(--secondary);
+            font-size: 14px;
+            line-height: 34px;
+        }
+
+        .taxonomy-pills .a:hover {
+            background: var(--border);
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        .taxonomy-pills .count {
+            color: var(--secondary);
+            font-size: 12px;
+            margin-left: 2px;
+        }
+
+        /* Pagination (rendered by the paginator helper) */
         .pagination {
             display: flex;
             align-items: center;
-            gap: 12px;
-            margin-top: 28px;
-            font-size: 0.9rem;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: var(--gap) 0 calc(var(--gap) * 2);
         }
 
         .pagination-list {
             display: flex;
-            gap: 4px;
+            gap: 6px;
             list-style: none;
             margin: 0;
             padding: 0;
@@ -457,87 +620,129 @@ fn base_style_text() -> &'static str {
             justify-content: center;
             min-width: 32px;
             height: 32px;
-            padding: 0 8px;
+            padding: 0 10px;
             border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text);
+            border-radius: var(--radius);
+            background: var(--code-bg);
+            color: var(--secondary);
+            font-size: 14px;
         }
 
         .pagination-prev:hover, .pagination-next:hover, .pagination-link:hover {
-            border-color: var(--accent);
+            background: var(--border);
+            color: var(--primary);
             text-decoration: none;
         }
 
         .pagination-current {
-            background: var(--accent);
-            border-color: var(--accent);
-            color: var(--on-accent);
+            border-color: var(--tertiary);
+            color: var(--primary);
             font-weight: 600;
         }
 
         /* Footer */
-        .site-footer {
-            padding: 24px 0 40px;
-            border-top: 1px solid var(--border);
-            color: var(--muted);
-            font-size: 0.875rem;
+        .footer {
+            max-width: var(--main-width);
+            margin: 0 auto;
+            padding: calc(var(--gap) * 2) var(--gap) var(--gap);
+            color: var(--secondary);
+            font-size: 13px;
+            text-align: center;
         }
 
-        .footer-inner {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            gap: 8px;
+        .no-posts {
+            color: var(--secondary);
         }
 
-        .site-footer a {
-            color: var(--muted);
-            text-decoration: underline;
-            text-underline-offset: 3px;
-        }
-
-        .site-footer a:hover {
-            color: var(--text);
-        }
-
-        @media (max-width: 640px) {
-            main {
-                padding: 32px 0 56px;
+        @media (max-width: 600px) {
+            .nav-inner {
+                padding: 0 16px;
             }
 
-            .card {
-                padding: 20px;
+            .nav-links {
+                gap: 12px;
+                font-size: 13px;
+            }
+
+            .post-title {
+                font-size: 32px;
+            }
+
+            .post-entry {
+                padding: 18px;
             }
 
             .taxonomy-grid {
                 grid-template-columns: 1fr;
             }
         }
+
+        @media (prefers-reduced-motion: reduce) {
+            html {
+                scroll-behavior: auto;
+            }
+
+            .post-entry {
+                transition: none;
+            }
+
+            .post-entry:hover {
+                transform: none;
+            }
+        }
     "#
 }
 
+/// Shared `<head>`: theme pre-paint script, title and inline styles.
+fn base_head(title: &str) -> String {
+    format!(
+        r#"<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{title}</title>
+    <script>
+    (() => document.documentElement.dataset.theme = localStorage.getItem('tless-theme')
+        || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'))();
+    </script>
+    <style>{css}</style>
+</head>
+"#,
+        css = base_style_text(),
+        title = title,
+    )
+}
+
 fn base_header() -> &'static str {
-    r#"    <header class="site-header">
-        <div class="container header-inner">
-            <a class="site-logo" href="/">Tless</a>
-            <nav class="site-nav">
-                <a href="/">Home</a>
-                <a href="/post/test">Example Post</a>
-                <a href="/tags/rust">Rust</a>
-                <a href="/categories/general">General</a>
-            </nav>
-        </div>
-    </header>
+    r#"<header class="nav">
+    <div class="nav-inner">
+        <div class="site-name"><a href="/index.html">Tless</a></div>
+        <nav class="nav-links">
+            <a href="/index.html">Home</a>
+            <a href="/hello-tless">Example Post</a>
+            <a href="/tags/rust">Rust</a>
+            <a href="/categories/general">General</a>
+            <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle theme">
+                <svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
+                <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+            </button>
+        </nav>
+    </div>
+</header>
 "#
 }
 
 fn base_footer() -> &'static str {
-    r#"    <footer class="site-footer">
-        <div class="container footer-inner">
-            <span>© Tless</span>
-            <span>Built with Tless</span>
-        </div>
-    </footer>
+    r#"<footer class="footer">
+    <span>© Tless · Built with Tless</span>
+</footer>
+<script>
+const toggleTheme = () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem('tless-theme', next);
+};
+document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+</script>
 "#
 }
 
@@ -545,38 +750,45 @@ fn base_index_theme_text() -> String {
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{{{ title | default(value="Home") }}}} · Tless</title>
-    <style>{}</style>
-</head>
+{head}
 <body>
-{}
-    <main class="container">
-        <section class="page-header">
-            <h1 class="page-title">{{{{ title | default(value="Home") }}}}</h1>
-            <p class="page-description">A clean, minimal theme with automatic dark mode.</p>
-        </section>
-        {{% if content %}}
-        <section class="card section-content">
-            <div class="prose">{{{{ content | safe }}}}</div>
-        </section>
-        {{% endif %}}
-        <section class="card">
-            <h2 class="section-title">Recent posts</h2>
-            <div class="post-list-wrap">
-                {{{{ list_posts(order=-1, list=true, amount=10, show_count=false) | safe }}}}
-            </div>
-        </section>
-    </main>
-{}
+{header}
+<main class="main">
+    {{% if content %}}
+    <article class="post">
+        <h1 class="post-title">{{{{ title | default(value="Home") }}}}</h1>
+        <div class="post-content">{{{{ content | safe }}}}</div>
+    </article>
+    {{% else %}}
+    <section class="recent-posts">
+        <h2 class="recent-title">Recent Posts</h2>
+        {{% for p in posts %}}
+        <article class="post-entry">
+            <header class="entry-header">
+                <h2><a href="{{{{ p.title }}}}">{{{{ p.title }}}}</a></h2>
+            </header>
+            <footer class="entry-footer">
+                {{% if p.date %}}
+                <span class="entry-date"><time>{{{{ date(ts=p.date, fmt="%Y-%m-%d") }}}}</time></span>
+                {{% endif %}}
+                {{% if p.tags %}}
+                <span class="entry-tags">{{% for t in p.tags %}}<span>#{{{{ t }}}}</span>{{% endfor %}}</span>
+                {{% endif %}}
+            </footer>
+        </article>
+        {{% else %}}
+        <p class="no-posts">No posts yet. Write one with: tless blog add &lt;name&gt; &amp;&amp; tless blog publish &lt;name&gt;</p>
+        {{% endfor %}}
+    </section>
+    {{% endif %}}
+</main>
+{footer}
 </body>
 </html>
 "#,
-        base_style_text(),
-        base_header(),
-        base_footer(),
+        head = base_head(r#"{{ title | default(value="Home") }} · Tless"#),
+        header = base_header(),
+        footer = base_footer(),
     )
 }
 
@@ -584,36 +796,31 @@ fn base_archive_theme_text() -> String {
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{{{ title | default(value="Article") }}}} · Tless</title>
-    <style>{}</style>
-</head>
+{head}
 <body>
-{}
-    <main class="container">
-        <article>
-            <header class="page-header">
-                <h1 class="page-title">{{{{ title | default(value="Article") }}}}</h1>
-                {{% if date %}}
-                <p class="page-description">{{{{ date }}}}</p>
-                {{% endif %}}
-            </header>
-            <details class="toc" open>
-                <summary>Table of contents</summary>
-                {{{{ toc(content=markdown, max_level=3) | safe }}}}
-            </details>
-            <div class="prose">{{{{ content | safe }}}}</div>
-        </article>
-    </main>
-{}
+{header}
+<main class="main">
+    <article class="post">
+        <h1 class="post-title">{{{{ title | default(value="Article") }}}}</h1>
+        <div class="post-meta">
+            {{% if date %}}
+            <time datetime="{{{{ date }}}}">{{{{ date(ts=date, fmt="%Y-%m-%d") }}}}</time>
+            {{% endif %}}
+        </div>
+        <details class="toc" open>
+            <summary>Table of contents</summary>
+            {{{{ toc(content=markdown, max_level=3) | safe }}}}
+        </details>
+        <div class="post-content">{{{{ content | safe }}}}</div>
+    </article>
+</main>
+{footer}
 </body>
 </html>
 "#,
-        base_style_text(),
-        base_header(),
-        base_footer(),
+        head = base_head(r#"{{ title | default(value="Article") }} · Tless"#),
+        header = base_header(),
+        footer = base_footer(),
     )
 }
 
@@ -621,48 +828,39 @@ fn base_category_theme_text() -> String {
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{{{ name | default(value="Taxonomy") }}}} · Tless</title>
-    <style>{}</style>
-</head>
+{head}
 <body>
-{}
-    <main class="container">
-        <section class="page-header">
-            <h1 class="page-title">{{{{ name | default(value="Taxonomy") }}}}</h1>
-            <p class="page-description">Posts in this taxonomy.</p>
-        </section>
-        <section class="card">
-            <div class="post-list-wrap">
-                {{{{ list_posts(order=-1, list=true, amount=20, show_count=false) | safe }}}}
+{header}
+<main class="main">
+    <h1 class="post-title">{{{{ name | default(value="Taxonomy") }}}}</h1>
+    <div class="post-meta">Posts in this taxonomy.</div>
+    <section class="entry-list">
+        {{{{ list_posts(order=-1, list=true, amount=20, show_count=false) | safe }}}}
+    </section>
+    <div class="pagination">
+        {{{{ paginator(current=1, total=3, base="?page=") | safe }}}}
+    </div>
+    <div class="taxonomy-grid">
+        <section class="taxonomy-card">
+            <h2>Categories</h2>
+            <div class="taxonomy-pills">
+                {{{{ list_categories(order=-1, list=false, separator=" ", show_count=true) | safe }}}}
             </div>
-            <div class="pagination">
-                {{{{ paginator(current=1, total=3, base="?page=") | safe }}}}
+        </section>
+        <section class="taxonomy-card">
+            <h2>Tags</h2>
+            <div class="taxonomy-pills">
+                {{{{ list_tags(order=-1, list=false, separator=" ", show_count=true) | safe }}}}
             </div>
         </section>
-        <div class="taxonomy-grid">
-            <section class="card">
-                <h2 class="section-title">Categories</h2>
-                <div class="taxonomy-wrap">
-                    {{{{ list_categories(order=-1, list=false, separator=" ", show_count=true) | safe }}}}
-                </div>
-            </section>
-            <section class="card">
-                <h2 class="section-title">Tags</h2>
-                <div class="taxonomy-wrap">
-                    {{{{ list_tags(order=-1, list=false, separator=" ", show_count=true) | safe }}}}
-                </div>
-            </section>
-        </div>
-    </main>
-{}
+    </div>
+</main>
+{footer}
 </body>
 </html>
 "#,
-        base_style_text(),
-        base_header(),
-        base_footer(),
+        head = base_head(r#"{{ name | default(value="Taxonomy") }} · Tless"#),
+        header = base_header(),
+        footer = base_footer(),
     )
 }

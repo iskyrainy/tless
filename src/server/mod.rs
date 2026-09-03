@@ -21,7 +21,6 @@ use crate::{
     file::{Metadata, parse_file},
 };
 
-mod deploy;
 mod helper;
 mod render;
 mod run;

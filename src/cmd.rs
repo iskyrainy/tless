@@ -151,24 +151,6 @@ struct Site {
     /// ```
     #[clap(short, long)]
     generate: bool,
-
-    /// Deploy site to github page.
-    ///
-    /// usage:
-    /// ```bash
-    /// tless site -d
-    /// ```
-    #[clap(short, long)]
-    deploy: bool,
-
-    /// Backup site data to pkg.
-    ///
-    /// usage:
-    /// ```bash
-    /// tless site -b
-    /// ```
-    #[clap(short, long)]
-    backup: bool,
 }
 
 /// Parse command line arguments and run the selected subcommand.
@@ -220,16 +202,11 @@ fn handle_site(site: Site) -> Result<()> {
         Ok(())
     } else if site.generate {
         info!("Generating static pages...");
-        tokio::runtime::Handle::current()
+        let runtime = tokio::runtime::Runtime::new().context("Failed to create runtime")?;
+        runtime
             .block_on(server::render_all())
             .context("Failed to generate static pages")?;
         info!("Generated static pages");
-        Ok(())
-    } else if site.deploy {
-        info!("Deploying site to GitHub Pages...");
-        Ok(())
-    } else if site.backup {
-        info!("Backing up site data...");
         Ok(())
     } else {
         bail!("No valid site operation specified");

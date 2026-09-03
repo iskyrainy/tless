@@ -1,14 +1,11 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use actix_web::{App, HttpResponse, HttpServer, Responder, get, web};
 use anyhow::{Context, Result};
 use tokio::{fs, select};
 use tracing::{info, warn};
 
-use crate::{
-    BASE_DIR,
-    server::{self, get_public_path, render},
-};
+use crate::server::{self, get_public_path, render};
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 pub async fn run(port: u16) -> Result<()> {
@@ -36,10 +33,11 @@ fn init_server(
     let server = HttpServer::new(|| {
         App::new()
             .service(hi)
-            .service(get_page)
+            .service(home)
             .service(get_archive)
             .service(get_category)
             .service(get_tag)
+            .service(get_static_files)
     })
     .shutdown_signal(async move {
         // Wait ctrl_c for quit gracefully
@@ -57,7 +55,7 @@ fn init_server(
 
 #[get("/")]
 async fn home() -> impl Responder {
-    get_static_file(String::from("index")).await
+    get_static_file(String::from("index.html")).await
 }
 
 #[get("/hi")]
@@ -65,9 +63,10 @@ async fn hi() -> impl Responder {
     HttpResponse::Ok().body("hi")
 }
 
-#[get("/{page}")]
-async fn get_page(page: web::Path<String>) -> impl Responder {
-    let name = page.into_inner();
+/// Fallback route serving any file under `public/` (posts, pages, assets).
+#[get("/{path:.*}")]
+async fn get_static_files(path: web::Path<String>) -> impl Responder {
+    let name = path.into_inner();
     get_static_file(name).await
 }
 
@@ -97,31 +96,44 @@ async fn get_static_file(name: String) -> impl Responder {
             return HttpResponse::BadRequest().body("Invalid target");
         }
     };
-    match fs::read_to_string(safe_path).await {
-        Ok(html) => HttpResponse::Ok()
-            .content_type("text/html; charset=utf-8")
-            .body(html),
+    match fs::read(safe_path).await {
+        Ok(bytes) => HttpResponse::Ok()
+            .content_type(content_type(&name))
+            .body(bytes),
         Err(_) => HttpResponse::NotFound().body("Target not found"),
     }
 }
 
+/// Resolve a request path inside `public/`, rejecting traversal attempts and
+/// hidden files such as the `.post_hash.json` cache.
 fn validate_and_get_path(file_name: &str) -> Result<PathBuf, &'static str> {
-    if file_name.contains("..") || file_name.contains('/') || file_name.contains('\\') {
+    if file_name.is_empty()
+        || file_name.starts_with('/')
+        || file_name.contains('\\')
+        || file_name
+            .split('/')
+            .any(|seg| seg.is_empty() || seg == ".." || seg.starts_with('.'))
+    {
         return Err("Invalid path");
     }
+    Ok(get_public_path(file_name))
+}
 
-    if !file_name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err("Invalid characters");
+fn content_type(path: &str) -> &'static str {
+    match Path::new(path).extension().and_then(|e| e.to_str()) {
+        // extensionless files are rendered HTML pages
+        None | Some("html") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("json") => "application/json",
+        Some("xml") => "application/xml",
+        Some("woff2") => "font/woff2",
+        _ => "application/octet-stream",
     }
-
-    let full_path = get_public_path(file_name);
-
-    if !full_path.starts_with(BASE_DIR.to_path_buf()) {
-        return Err("Path traversal detected");
-    }
-
-    Ok(full_path)
 }
