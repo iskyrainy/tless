@@ -84,6 +84,7 @@ fn build_tag(
     path_attr: &str,
     attrs: &[(&str, &str)],
     val: &Value,
+    text: Option<&str>,
 ) -> TeraResult<String> {
     let mut html = String::new();
     if let Some(s) = val.as_str() {
@@ -97,6 +98,9 @@ fn build_tag(
             let _ = write!(html, r#" {k}="{v}""#);
         }
         let _ = write!(html, r#" {path_attr}="{}">"#, escape_html_attr(&path));
+        if let Some(text) = text {
+            let _ = write!(html, "{text}</{tag}>");
+        }
         return Ok(html);
     }
 
@@ -128,6 +132,9 @@ fn build_tag(
             );
         }
         html.push('>');
+        if let Some(text) = text {
+            let _ = write!(html, "{text}</{tag}>");
+        }
         return Ok(html);
     }
 
@@ -142,13 +149,14 @@ fn tag_call(
     attrs: &[(&str, &str)],
 ) -> TeraResult<Value> {
     let path = kwargs.must_get::<Value>("path")?;
+    let text = kwargs.get("text")?;
     let html = match path.as_array() {
         Some(paths) => paths
             .iter()
-            .map(|p| build_tag(tag, path_attr, attrs, p))
+            .map(|p| build_tag(tag, path_attr, attrs, p, text))
             .collect::<TeraResult<Vec<_>>>()?
             .join("\n"),
-        None => build_tag(tag, path_attr, attrs, &path)?,
+        None => build_tag(tag, path_attr, attrs, &path, text)?,
     };
     Ok(Value::safe_string(&html))
 }
@@ -922,6 +930,10 @@ mod tests {
             render(r#"{{ link(path="/about") }}"#),
             r#"<a href="/about">"#
         );
+        assert_eq!(
+            render(r#"{{ link(path="/about", text="About") }}"#),
+            r#"<a href="/about">About</a>"#
+        );
     }
 
     #[test]
@@ -1080,7 +1092,7 @@ mod tests {
         attrs.insert("href".to_string(), Value::from("x\"y"));
         attrs.insert("title".to_string(), Value::from("hi"));
         let val = Value::from(attrs);
-        let html = build_tag("a", "href", &[], &val).unwrap();
+        let html = build_tag("a", "href", &[], &val, None).unwrap();
         // values are stored in a hash map, so check per attribute
         assert!(html.starts_with("<a "));
         assert!(html.contains(r#"href="/x&quot;y""#));
@@ -1090,7 +1102,7 @@ mod tests {
 
     #[test]
     fn build_tag_rejects_non_string_or_map_values() {
-        assert!(build_tag("a", "href", &[], &Value::from(42)).is_err());
+        assert!(build_tag("a", "href", &[], &Value::from(42), None).is_err());
     }
 
     #[test]

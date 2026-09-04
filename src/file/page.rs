@@ -1,6 +1,7 @@
 use std::fs;
 
 use anyhow::{Result, bail};
+use tracing::info;
 
 use crate::file::{current_timestamp, get_path, is_file_exist};
 
@@ -11,6 +12,7 @@ pub fn add_page(name: &str) -> Result<()> {
         bail!("Page already exists.");
     }
     fs::write(&file_path, base_page_text(name))?;
+    info!("Page '{}' created", file_path.display());
     Ok(())
 }
 
@@ -29,5 +31,6 @@ pub fn remove_page(name: &str) -> Result<()> {
         bail!("Page does not exist.");
     }
     fs::remove_file(file_path)?;
+    info!("Page '{}' removed", name);
     Ok(())
 }

@@ -12,7 +12,7 @@ pub fn add_blog(name: &str) -> Result<()> {
         bail!("Blog already exists.");
     }
     fs::write(&file_path, base_blog_text())?;
-    info!("Blog '{}' created in 'draft'.", file_path.display());
+    info!("Blog '{}' created in 'draft'", file_path.display());
     Ok(())
 }
 
@@ -32,7 +32,7 @@ pub fn remove_blog(name: &str, class: &str) -> Result<()> {
         bail!("Blog does not exist.");
     }
     fs::remove_file(&file_path)?;
-    info!("Blog '{}' removed from '{}'.", name, class);
+    info!("Blog '{}' removed from '{}'", name, class);
     Ok(())
 }
 
@@ -40,11 +40,11 @@ pub fn remove_blog(name: &str, class: &str) -> Result<()> {
 pub fn publish_blog(name: &str) -> Result<()> {
     let draft_path = get_path(name, "draft");
     if !is_file_exist(&draft_path) {
-        bail!("Draft blog does not exist.");
+        bail!("Draft blog does not exist");
     }
     let post_path = get_path(name, "post");
     if is_file_exist(&post_path) {
-        bail!("Post blog already exists.");
+        bail!("Post blog already exists");
     }
     let metadata = parse_file(PathBuf::from(&draft_path))?;
     let frontmatter = format!(
@@ -58,6 +58,6 @@ pub fn publish_blog(name: &str) -> Result<()> {
     let content = format!("{}{}", frontmatter, file_str);
     fs::write(&post_path, content)?;
     fs::remove_file(&draft_path)?;
-    info!("Blog '{}' published from 'draft' to 'post'.", name);
+    info!("Blog '{}' published from 'draft' to 'post'", name);
     Ok(())
 }

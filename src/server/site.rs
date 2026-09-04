@@ -715,12 +715,12 @@ fn base_head(title: &str) -> String {
 fn base_header() -> &'static str {
     r#"<header class="nav">
     <div class="nav-inner">
-        <div class="site-name"><a href="/index.html">Tless</a></div>
+        <div class="site-name"><a href="/">Tless</a></div>
         <nav class="nav-links">
-            <a href="/index.html">Home</a>
-            <a href="/hello-tless">Example Post</a>
-            <a href="/tags/rust">Rust</a>
-            <a href="/categories/general">General</a>
+            {{ link(path="/", text="Home") }}
+            {{ link(path="/about", text="About") }}
+            {{ link(path="/tags", text="Tags") }}
+            {{ link(path="/categories", text="Categories") }}
             <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle theme">
                 <svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
                 <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
@@ -762,7 +762,7 @@ fn base_index_theme_text() -> String {
     {{% else %}}
     <section class="recent-posts">
         <h2 class="recent-title">Recent Posts</h2>
-        {{% for p in posts %}}
+        {{% for p in site.posts %}}
         <article class="post-entry">
             <header class="entry-header">
                 <h2><a href="{{{{ p.title }}}}">{{{{ p.title }}}}</a></h2>

@@ -37,7 +37,7 @@ pub(crate) struct Config {
 }
 
 /// Part of `[site]` configuration details.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(crate) struct SiteConfig {
     pub title: String,
     pub description: String,
@@ -78,98 +78,10 @@ fn get_config_toml() -> Result<Config> {
 }
 
 /// Global static configuration accessible throughout the application.
-pub(crate) static CONFIG: LazyLock<ArcSwap<Config>> = LazyLock::new(|| match get_config_toml() {
+static CONFIG: LazyLock<ArcSwap<Config>> = LazyLock::new(|| match get_config_toml() {
     Ok(config) => ArcSwap::from_pointee(config),
     Err(e) => error::fatal(format!("{e:#}")),
 });
-
-enum ConfigWatchEvent {
-    Rewatch,
-    Reload,
-}
-
-/// Watch the configuration file for changes and update the global `CONFIG` accordingly.
-/// # Arguments
-/// * `shutdown_rx` - A receiver to listen for shutdown signals.
-async fn watch_config(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
-    let config_path = get_config_path();
-    let (tx, mut rx) = mpsc::channel(32);
-    let mut debouncer = new_debouncer(
-        Duration::from_millis(1000),
-        None,
-        move |result: Result<Vec<DebouncedEvent>, Vec<_>>| match result {
-            Ok(events) => {
-                let mut reload = false;
-                let mut rewatch = false;
-                for event in events {
-                    match event.event.kind {
-                        EventKind::Modify(_) => {
-                            reload = true;
-                        }
-                        EventKind::Create(_) => {
-                            reload = true;
-                            rewatch = true;
-                        }
-                        EventKind::Remove(_) => {
-                            rewatch = true;
-                        }
-                        _ => {}
-                    }
-                }
-
-                let event = if rewatch {
-                    Some(ConfigWatchEvent::Rewatch)
-                } else if reload {
-                    Some(ConfigWatchEvent::Reload)
-                } else {
-                    None
-                };
-                if let Some(event) = event
-                    && let Err(e) = tx.try_send(event)
-                {
-                    error!("Failed to send config event: {}", e);
-                }
-            }
-            Err(e) => {
-                error!("Config watcher error: {:?}", e);
-            }
-        },
-    )?;
-
-    debouncer.watch(&config_path, notify::RecursiveMode::NonRecursive)?;
-
-    loop {
-        tokio::select! {
-            _ = shutdown_rx.recv() => {
-                info!("Config watcher received shutdown signal");
-                break;
-            }
-            Some(event) = rx.recv() => {
-                let config = match get_config_toml() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        error!("Failed to load config: {}", e);
-                        continue;
-                    }
-                };
-                CONFIG.store(Arc::new(config));
-                if let ConfigWatchEvent::Rewatch = event
-                    && config_path.exists() && let Err(e) = debouncer.watch(
-                        &config_path,
-                        notify::RecursiveMode::NonRecursive,
-                    ) {
-                        error!("Config file rewatch error: {}", e);
-                    }
-            }
-            else => {
-                info!("Config watcher channel closed");
-                break;
-            }
-        }
-    }
-
-    Ok(())
-}
 
 /// Struct of global source info, including `post`, `page`.
 /// # Fields
@@ -183,6 +95,7 @@ pub(crate) struct Site {
     pub pages: Vec<Metadata>,
     pub categories: HashMap<String, ClassMap>,
     pub tags: HashMap<String, ClassMap>,
+    pub config: SiteConfig,
 }
 
 impl Site {
@@ -192,6 +105,7 @@ impl Site {
             pages: vec![],
             categories: HashMap::new(),
             tags: HashMap::new(),
+            config: SiteConfig::default(),
         }
     }
 }
@@ -227,7 +141,7 @@ pub(crate) fn extract_root_path(url: &str) -> String {
 fn get_site() -> Site {
     let post_dir = get_source_path("post");
     let page_dir = get_source_path("page");
-    let site = Site::new();
+    let mut site = Site::new();
 
     let class_path = |c: &str, t: &str| -> String {
         let config = CONFIG.load();
@@ -239,7 +153,7 @@ fn get_site() -> Site {
         )
     };
 
-    let load = |mut site: Site, dirs: Vec<PathBuf>| -> Site {
+    let load = |site: &mut Site, dirs: Vec<PathBuf>| {
         for dir in dirs {
             let Ok(entries) = fs::read_dir(dir) else {
                 continue;
@@ -286,10 +200,11 @@ fn get_site() -> Site {
                 }
             }
         }
-        site
     };
 
-    load(site, vec![post_dir, page_dir])
+    load(&mut site, vec![post_dir, page_dir]);
+    site.config = CONFIG.load().as_ref().site.clone();
+    site
 }
 
 /// Only accept valid source files
@@ -510,7 +425,6 @@ async fn watch_logged(name: &str, watch: impl Future<Output = Result<()>>) {
 /// * `shutdown_tx` - Subscribe the sender to recv a shutdown signal.
 pub(crate) async fn start_watch(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
     let _ = join! {
-        watch_logged("config", watch_config(shutdown_tx.subscribe())),
         watch_logged("source", watch_source(shutdown_tx.subscribe())),
         watch_logged("layout", watch_layout(shutdown_tx.subscribe())),
         watch_logged("helper", watch_helper(shutdown_tx.subscribe())),

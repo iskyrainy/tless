@@ -55,7 +55,7 @@ fn init_server(
 
 #[get("/")]
 async fn home() -> impl Responder {
-    get_static_file(String::from("index.html")).await
+    get_static_file(String::from("index")).await
 }
 
 #[get("/hi")]
