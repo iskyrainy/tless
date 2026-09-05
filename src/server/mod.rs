@@ -166,7 +166,7 @@ fn get_site() -> Site {
                 if !is_source_file(&path) {
                     continue;
                 }
-                let metadata = match parse_file(path) {
+                let metadata = match parse_file(&path) {
                     Ok(m) => m,
                     Err(e) => {
                         error!("Failed to parse source file: {}", e);
@@ -252,7 +252,20 @@ async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
                     let event = &e.event;
                     match event.kind {
                         EventKind::Create(_) | EventKind::Modify(_) => {
-                            if let Err(err) = render::render_to_file(&event.paths).await {
+                            let posts = event
+                                .paths
+                                .iter()
+                                .filter(|p| p.starts_with(get_source_path("post")))
+                                .collect::<Vec<_>>();
+                            if let Err(err) = render::render_page(posts).await {
+                                error!("Failed to render changed file: {}", err);
+                            }
+                            let pages = event
+                                .paths
+                                .iter()
+                                .filter(|p| p.starts_with(get_source_path("page")))
+                                .collect::<Vec<_>>();
+                            if let Err(err) = render::render_page(pages).await {
                                 error!("Failed to render changed file: {}", err);
                             }
                             update_flag = true;

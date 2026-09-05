@@ -38,7 +38,7 @@ pub fn init() -> Result<()> {
 
     let layout_dir = current_dir.join("theme").join("base").join("layout");
     fs::create_dir_all(&layout_dir)?;
-    let resource_dir = current_dir.join("theme").join("base").join("resource");
+    let resource_dir = current_dir.join("theme").join("base").join("assets");
     fs::create_dir_all(resource_dir)?;
     write_base_theme(&layout_dir)?;
     Ok(())
@@ -715,7 +715,7 @@ fn base_head(title: &str) -> String {
 fn base_header() -> &'static str {
     r#"<header class="nav">
     <div class="nav-inner">
-        <div class="site-name"><a href="/">Tless</a></div>
+        <div class="site-name"><a href="/">{{ site.config.title }}</a></div>
         <nav class="nav-links">
             {{ link(path="/", text="Home") }}
             {{ link(path="/about", text="About") }}
@@ -762,7 +762,7 @@ fn base_index_theme_text() -> String {
     {{% else %}}
     <section class="recent-posts">
         <h2 class="recent-title">Recent Posts</h2>
-        {{% for p in site.posts %}}
+        {{% for p in recent_posts %}}
         <article class="post-entry">
             <header class="entry-header">
                 <h2><a href="{{{{ p.title }}}}">{{{{ p.title }}}}</a></h2>

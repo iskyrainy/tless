@@ -179,18 +179,18 @@ fn handle_server(server: Server) -> Result<()> {
 
 fn handle_blog(blog: Blog) -> Result<()> {
     match &blog.cli {
-        BlogArgs::Add { name } => file::add_blog(name).context("Failed to add blog"),
+        BlogArgs::Add { name } => file::Blog::add(name).context("Failed to add blog"),
         BlogArgs::Remove { class, name } => {
-            file::remove_blog(name, class).context("Failed to remove blog")
+            file::Blog::remove(name, class).context("Failed to remove blog")
         }
-        BlogArgs::Publish { name } => file::publish_blog(name).context("Failed to publish blog"),
+        BlogArgs::Publish { name } => file::Blog::publish(name).context("Failed to publish blog"),
     }
 }
 
 fn handle_page(page: Page) -> Result<()> {
     match &page.cli {
-        PageArgs::Add { name } => file::add_page(name).context("Failed to add page"),
-        PageArgs::Remove { name } => file::remove_page(name).context("Failed to remove page"),
+        PageArgs::Add { name } => file::Page::add(name).context("Failed to add page"),
+        PageArgs::Remove { name } => file::Page::remove(name).context("Failed to remove page"),
     }
 }
 

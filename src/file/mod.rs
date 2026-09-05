@@ -9,6 +9,7 @@ use std::{
 use anyhow::{Result, anyhow};
 use chrono::Utc;
 use chrono_tz::Tz;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::BASE_DIR;
@@ -16,8 +17,8 @@ use crate::BASE_DIR;
 mod blog;
 mod page;
 
-pub use blog::{add_blog, publish_blog, remove_blog};
-pub use page::{add_page, remove_page};
+pub use blog::Blog;
+pub use page::Page;
 
 /// Metadata parsed from a source file's frontmatter.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -71,8 +72,8 @@ fn configured_timezone() -> Option<Tz> {
 }
 
 /// Parse the frontmatter and file name of a source file into [Metadata].
-pub fn parse_file(path: PathBuf) -> Result<Metadata> {
-    let mut file = fs::File::open(&path)?;
+pub fn parse_file(path: &PathBuf) -> Result<Metadata> {
+    let mut file = fs::File::open(path)?;
     let mut text = String::new();
     if file.read_to_string(&mut text).is_err() {
         return Err(anyhow!("Failed to read blog."));
@@ -87,7 +88,7 @@ pub fn parse_file(path: PathBuf) -> Result<Metadata> {
         .strip_suffix(".md")
         .unwrap_or_default()
         .to_string();
-    metadata.path = path;
+    metadata.path = path.clone();
     if let Some(date) = frontmatter.get("date").and_then(|v| v.as_str()) {
         metadata.date = date.to_string();
     }
@@ -109,4 +110,18 @@ pub fn parse_file(path: PathBuf) -> Result<Metadata> {
         metadata.categories = Some(category_list);
     }
     Ok(metadata)
+}
+
+pub(crate) trait ValidEntity {
+    fn validate_and_get_path(name: &str) -> Result<PathBuf>;
+
+    fn generate_slug(input: &str) -> String {
+        let mut slug = input.to_lowercase();
+        let re = Regex::new(r"[^a-z0-9\s]").unwrap();
+        slug = re.replace_all(&slug, " ").to_string();
+        slug = slug.split_whitespace().collect::<Vec<&str>>().join("-");
+        let re_multi = Regex::new(r"-+").unwrap();
+        slug = re_multi.replace_all(&slug, "-").to_string();
+        slug.trim_matches('-').to_string()
+    }
 }

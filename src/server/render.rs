@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
+use anyhow::{Result, anyhow};
 use arc_swap::ArcSwap;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use data_encoding::HEXUPPER;
@@ -19,7 +20,7 @@ use tokio::{
 use tracing::{error, info};
 
 use crate::{
-    file,
+    file::{self, Metadata},
     server::{SITE, Site, TERA, get_layout_path, get_public_path, get_source_path},
 };
 
@@ -27,86 +28,187 @@ use crate::{
 const DEFAULT_OPTIONS: Options = Options::all();
 
 /// Render markdown to HTML string.
-pub(crate) fn render(markdown: &str) -> String {
+#[inline]
+fn render(markdown: &str) -> String {
     let parser = Parser::new_ext(markdown, DEFAULT_OPTIONS);
     let mut html_output = String::new();
     html::push_html(&mut html_output, parser);
     html_output
 }
 
-pub(crate) async fn render_to_file(events_path: &[PathBuf]) -> std::io::Result<()> {
-    let public_dir = Arc::new(get_public_path("."));
-
-    let concurrency = num_cpus::get() + 1;
-    stream::iter(events_path)
-        .map(|path| {
-            let public_dir = public_dir.clone();
-            async move {
-                let metadata = match file::parse_file(path.clone()) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        error!("Failed to parse changed post: {}", e);
-                        return Err(std::io::Error::other(e.to_string()));
-                    }
-                };
-                let file_str = match pre_hash_check(path).await? {
-                    Some(s) => s,
-                    None => return Ok(()),
-                };
-
-                // The file parsed successfully above, so extracting the body
-                // cannot fail here; fall back to the raw text otherwise
-                let md_body = frontmatter_gen::extract(&file_str)
-                    .map(|(_, body)| body.to_string())
-                    .unwrap_or_default();
-
-                let md_html_str = render(&md_body);
-                let file_path = public_dir.join(&metadata.title);
-                let file = File::create(&file_path).await?;
-                let mut writer = BufWriter::new(file);
-
-                let mut context = Context::new();
-                context.insert("content", &md_html_str);
-                context.insert("markdown", &md_body);
-                context.insert("title", &metadata.title);
-                context.insert("date", &metadata.date);
-                context.insert("site", SITE.load().as_ref());
-                let layout = metadata.layout.as_deref().unwrap_or("archive.html");
-                match TERA.load().render(layout, &context) {
-                    Ok(rendered) => {
-                        writer.write_all(rendered.as_bytes()).await?;
-                        writer.flush().await?;
-                        info!("Rendered {}", metadata.title);
-                        Ok(())
-                    }
-                    Err(e) => {
-                        error!("Failed to render {}: {}", metadata.title, e);
-                        Err(std::io::Error::other(e))
-                    }
+#[inline]
+async fn render_class(metadata: &Metadata) -> Result<()> {
+    let pub_dir = Arc::new(get_public_path("."));
+    if let Some(cates) = &metadata.categories {
+        stream::iter(cates.iter().filter(|&c| !pub_dir.join(c).exists()))
+            .map(|c| {
+                let pub_dir = pub_dir.clone();
+                async move {
+                    let dst_dir = pub_dir.join(c);
+                    fs::create_dir_all(&dst_dir).await?;
+                    let mut context = Context::new();
+                    context.insert("site", SITE.load().as_ref());
+                    match TERA.load().render("categorie.html", &context) {
+                        Ok(rendered) => {
+                            let file = File::create(dst_dir.join("index.html")).await?;
+                            let mut writer = BufWriter::new(file);
+                            writer.write_all(rendered.as_bytes()).await?;
+                            writer.flush().await?;
+                        }
+                        Err(e) => {
+                            return Err(anyhow!("Failed to render {}: {}", &metadata.title, e));
+                        }
+                    };
+                    Ok(())
                 }
+            })
+            .buffer_unordered(num_cpus::get() + 1)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<()>>()?;
+    }
+
+    if let Some(tags) = &metadata.tags {
+        stream::iter(tags.iter().filter(|&c| !pub_dir.join(c).exists()))
+            .map(|c| {
+                let pub_dir = pub_dir.clone();
+                async move {
+                    let dst_dir = pub_dir.join(c);
+                    fs::create_dir_all(&dst_dir).await?;
+                    let mut context = Context::new();
+                    context.insert("site", SITE.load().as_ref());
+                    match TERA.load().render("tag.html", &context) {
+                        Ok(rendered) => {
+                            let file = File::create(dst_dir.join("index.html")).await?;
+                            let mut writer = BufWriter::new(file);
+                            writer.write_all(rendered.as_bytes()).await?;
+                            writer.flush().await?;
+                        }
+                        Err(e) => {
+                            return Err(anyhow!("Failed to render {}: {}", &metadata.title, e));
+                        }
+                    };
+                    Ok(())
+                }
+            })
+            .buffer_unordered(num_cpus::get() + 1)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<()>>()?;
+    }
+
+    Ok(())
+}
+
+#[derive(PartialEq)]
+enum RenderType {
+    Post,
+    Page,
+}
+
+#[inline]
+async fn render_file(src: &PathBuf, dst: &PathBuf, rt: RenderType) -> Result<()> {
+    let metadata = file::parse_file(src)?;
+    let file_str = fs::read_to_string(src).await?;
+    let md_body = frontmatter_gen::extract(&file_str)
+        .map(|(_, body)| body.to_string())
+        .unwrap_or_default();
+
+    let md_html_str = render(&md_body);
+    let mut context = Context::new();
+    context.insert("content", &md_html_str);
+    context.insert("markdown", &md_body);
+    context.insert("title", &metadata.title);
+    context.insert("date", &metadata.date);
+    context.insert("site", SITE.load().as_ref());
+    let layout = metadata.layout.as_deref().unwrap_or(match rt {
+        RenderType::Post => "archive.html",
+        RenderType::Page => "page.html",
+    });
+    match TERA.load().render(layout, &context) {
+        Ok(rendered) => {
+            let file = File::create(dst).await?;
+            let mut writer = BufWriter::new(file);
+            writer.write_all(rendered.as_bytes()).await?;
+            writer.flush().await?;
+        }
+        Err(e) => {
+            return Err(anyhow!("Failed to render {}: {}", &metadata.title, e));
+        }
+    };
+    if rt == RenderType::Post {
+        render_class(&metadata).await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn render_post(paths: Vec<&PathBuf>) -> Result<()> {
+    let pub_dir = Arc::new(get_public_path("."));
+    stream::iter(paths)
+        .map(|path| {
+            let pub_dir = pub_dir.clone();
+            async move {
+                if let Some(name) = path.file_name() {
+                    let name = name.to_string_lossy().to_string();
+                    let dst_dir = pub_dir.join(&name);
+                    fs::create_dir_all(&dst_dir).await?;
+                    let dst_file = dst_dir.join("index.html");
+                    render_file(path, &dst_file, RenderType::Post).await?;
+                }
+                Ok(())
             }
         })
-        .buffer_unordered(concurrency)
-        .collect::<Vec<_>>()
-        .await;
-    dump_json().await;
-    Ok(())
+        .buffer_unordered(num_cpus::get() + 1)
+        .collect::<Vec<Result<()>>>()
+        .await
+        .into_iter()
+        .collect::<Result<()>>()
+}
+
+pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
+    let pub_dir = Arc::new(get_public_path("."));
+    stream::iter(paths)
+        .map(|path| {
+            let pub_dir = pub_dir.clone();
+            async move {
+                if let Some(name) = path.file_name() {
+                    let name = name.to_string_lossy().to_string();
+                    let dst_dir = pub_dir.join(&name);
+                    fs::create_dir_all(&dst_dir).await?;
+                    let dst_file = dst_dir.join("index.html");
+                    render_file(path, &dst_file, RenderType::Page).await?;
+                }
+                Ok(())
+            }
+        })
+        .buffer_unordered(num_cpus::get() + 1)
+        .collect::<Vec<Result<()>>>()
+        .await
+        .into_iter()
+        .collect::<Result<()>>()
 }
 
 /// Render the whole site to the public dir: every post and page, the home
 /// page, and the active theme's static resources.
-pub async fn render_all() -> std::io::Result<()> {
+pub async fn render_all() -> Result<()> {
     let site = SITE.load();
-    remove_stale_outputs(&site).await;
-    let paths = site
-        .posts
-        .iter()
-        .chain(site.pages.iter())
-        .map(|d| d.path.clone())
-        .collect::<Vec<_>>();
-    render_to_file(&paths).await?;
-    // render_home(&site).await?;
+    // remove old
+    // remove_stale_outputs(&site).await;
+
+    // gen home: index
+    render_home(&site).await?;
+
+    // gen assets
     copy_theme_resources()?;
+
+    // TODO: gen robots.txt
+
+    // TODO: gen rss.xml, sitemap.xml
+
+    render_post(site.posts.iter().map(|d| &d.path).collect::<Vec<_>>()).await?;
+    render_page(site.pages.iter().map(|d| &d.path).collect::<Vec<_>>()).await?;
     Ok(())
 }
 
@@ -150,15 +252,16 @@ async fn render_home(site: &Site) -> std::io::Result<()> {
     let tera = TERA.load();
     if !tera
         .get_template_names()
-        .any(|name| name == "index.html" || name == "index")
+        .any(|name| name == "index.html" || name == "index.md")
     {
-        info!("No index.html layout found, skipping home page");
+        info!("Skipping home page");
         return Ok(());
     }
     let mut context = Context::new();
     // an empty content keeps `{% if content %}` blocks in the layout happy
     context.insert("content", "");
-    context.insert("posts", &recent_posts(site));
+    context.insert("recent_posts", &recent_posts(site));
+    context.insert("site", site);
     match tera.render("index.html", &context) {
         Ok(rendered) => {
             fs::write(get_public_path("index.html"), rendered).await?;
@@ -198,11 +301,11 @@ fn date_rank(date: &str) -> DateTime<Utc> {
 
 /// Copy the active theme's `resource/` directory into `public/`.
 pub(crate) fn copy_theme_resources() -> std::io::Result<()> {
-    let resource_dir = get_layout_path().join("resource");
+    let resource_dir = get_layout_path().join("assets");
     if !resource_dir.exists() {
         return Ok(());
     }
-    copy_dir_recursive(&resource_dir, &get_public_path("."))
+    copy_dir_recursive(&resource_dir, &get_public_path("assets"))
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
