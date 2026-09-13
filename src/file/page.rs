@@ -1,30 +1,17 @@
-use std::fs;
+use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use tracing::info;
 
-use crate::file::{ValidEntity, current_timestamp, get_path, is_file_exist};
+use crate::file::{ValidEntity, current_timestamp, get_path};
 
 pub struct Page;
 
 impl ValidEntity for Page {
-    fn validate_and_get_path(name: &str) -> Result<std::path::PathBuf> {
-        if name.trim().is_empty() {
-            bail!("Name cannot be empty");
-        }
-
-        if name.len() > 100 {
-            bail!("Name is too long: {0} characters (max: 100)", name.len());
-        }
-
-        let slug = Self::slugify(name);
-
-        if slug.is_empty() {
-            bail!("Invalid characters in name");
-        }
-
+    fn validate_and_get_path(name: &str) -> Result<PathBuf> {
+        let slug = Self::validate_name(name)?;
         let file_path = get_path(&slug, "page");
-        if is_file_exist(&file_path) {
+        if file_path.exists() {
             bail!("Page already exists.");
         }
         Ok(file_path)
@@ -52,9 +39,9 @@ impl Page {
 
     /// Remove an existing page file.
     pub fn remove(name: &str) -> Result<()> {
-        let slug = Self::slugify(name);
+        let slug = Self::validate_name(name)?;
         let file_path = get_path(&slug, "page");
-        if !is_file_exist(&file_path) {
+        if !file_path.exists() {
             bail!("Page does not exist.");
         }
         fs::remove_file(&file_path)

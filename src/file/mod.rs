@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::{BASE_DIR, server::SITE};
+use crate::{BASE_DIR, config, util::slugify};
 
 mod blog;
 mod page;
@@ -29,12 +29,6 @@ pub struct Metadata {
     pub path: PathBuf,
 }
 
-impl Metadata {
-    pub fn new() -> Self {
-        Metadata::default()
-    }
-}
-
 /// Path to a source file (`source/<class>/<name>.md`).
 #[inline]
 pub(crate) fn get_path(name: &str, class: &str) -> PathBuf {
@@ -45,21 +39,14 @@ pub(crate) fn get_path(name: &str, class: &str) -> PathBuf {
         .with_extension("md")
 }
 
-/// Check whether a file exists.
-#[inline]
-pub(crate) fn is_file_exist(path: &Path) -> bool {
-    path.exists()
-}
-
 /// Current timestamp formatted in the configured `[site] zone`, falling back to UTC.
 #[inline]
 pub(crate) fn current_timestamp() -> String {
-    let site = SITE.load();
-    Utc::now().with_timezone(&site.get_zone()).to_rfc3339()
+    Utc::now().with_timezone(&config::zone()).to_rfc3339()
 }
 
 /// Parse the frontmatter and file name of a source file into [Metadata].
-pub fn parse_file(path: &PathBuf) -> Result<(Metadata, String)> {
+pub fn parse_file(path: &Path) -> Result<(Metadata, String)> {
     let mut file =
         fs::File::open(path).context(format!("Failed to open file: {}", path.display()))?;
     let mut text = String::new();
@@ -70,8 +57,10 @@ pub fn parse_file(path: &PathBuf) -> Result<(Metadata, String)> {
         "Failed to extract file frontmatter: {}",
         path.display()
     ))?;
-    let mut metadata = Metadata::new();
-    metadata.path = path.clone();
+    let mut metadata = Metadata {
+        path: path.to_path_buf(),
+        ..Default::default()
+    };
     if let Some(title) = frontmatter.get("title").and_then(|v| v.as_str()) {
         metadata.title = title.to_string();
     } else {
@@ -107,20 +96,18 @@ pub fn parse_file(path: &PathBuf) -> Result<(Metadata, String)> {
 pub(crate) trait ValidEntity {
     fn validate_and_get_path(name: &str) -> Result<PathBuf>;
 
-    #[inline]
-    fn slugify(input: &str) -> String {
-        let mut slug = String::new();
-        let mut prev_dash = false;
-        for ch in input.chars() {
-            let lower = ch.to_ascii_lowercase();
-            if lower.is_ascii_alphanumeric() {
-                slug.push(lower);
-                prev_dash = false;
-            } else if !prev_dash && !slug.is_empty() {
-                slug.push('-');
-                prev_dash = true;
-            }
+    /// Reject empty or oversized names and return their slug.
+    fn validate_name(name: &str) -> Result<String> {
+        if name.trim().is_empty() {
+            bail!("Name cannot be empty");
         }
-        slug.trim_matches('-').to_string()
+        if name.len() > 100 {
+            bail!("Name is too long: {0} characters (max: 100)", name.len());
+        }
+        let slug = slugify(name);
+        if slug.is_empty() {
+            bail!("Invalid characters in name");
+        }
+        Ok(slug)
     }
 }

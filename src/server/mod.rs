@@ -7,9 +7,8 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use arc_swap::ArcSwap;
-use chrono_tz::Tz;
 use notify::EventKind;
 use notify_debouncer_full::{DebouncedEvent, new_debouncer};
 use serde::{Deserialize, Serialize};
@@ -18,7 +17,9 @@ use tokio::{join, select, sync::mpsc};
 use tracing::{error, info};
 
 use crate::{
-    BASE_DIR, error,
+    BASE_DIR, config,
+    config::SiteConfig,
+    error,
     file::{Metadata, parse_file},
 };
 
@@ -31,61 +32,6 @@ mod template;
 pub use render::render_all;
 pub use run::run;
 pub use site::init;
-
-/// Configuration structure for the application.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct Config {
-    pub site: SiteConfig,
-}
-
-/// Part of `[site]` configuration details.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub(crate) struct SiteConfig {
-    pub title: String,
-    pub subtitle: String,
-    pub description: String,
-    pub rights: String,
-    pub author: String,
-    pub url: String,
-    pub zone: String,
-    pub theme: String,
-    pub favicon: String,
-    pub menu: Vec<Menu>,
-    #[serde(skip)]
-    inner_zone: Option<Tz>,
-}
-
-impl Site {
-    pub fn get_zone(&self) -> Tz {
-        self.config.inner_zone.unwrap_or_default()
-    }
-}
-
-/// Menu item structure for site navigation.
-/// # Fields
-/// * `name` - The display name of the menu item.
-/// * `link` - The URL or path the menu item points to.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct Menu {
-    pub name: String,
-    pub link: String,
-}
-
-/// Get the path to the configuration file (`tless.toml`) in the current directory.
-#[inline]
-fn get_config_path() -> PathBuf {
-    BASE_DIR.join("tless.toml")
-}
-
-/// Load `tless.toml` to `CONFIG`.
-fn get_config_toml() -> Result<Config> {
-    let config_path = get_config_path();
-    if !config_path.exists() {
-        bail!("Configuration file not found at {}", config_path.display());
-    }
-    let config_content = fs::read_to_string(config_path)?;
-    Ok(toml::from_str(&config_content)?)
-}
 
 /// Struct of global source info, including `post`, `page`.
 /// # Fields
@@ -148,11 +94,8 @@ fn get_site() -> Site {
     let post_dir = get_source_path("post");
     let page_dir = get_source_path("page");
     let mut site = Site::new();
-    site.config = match get_config_toml() {
-        Ok(mut config) => {
-            config.site.inner_zone = config.site.zone.trim().parse::<Tz>().ok();
-            config.site
-        }
+    site.config = match config::load() {
+        Ok(config) => config.site,
         Err(e) => error::fatal(format!("{e:#}")),
     };
 

@@ -87,7 +87,7 @@ menu = [
 ]
 ```
 
-Changing `tless.toml` while the dev server runs reloads the configuration — and the whole site.
+`tless.toml` is read at startup and on every rebuild — restart the dev server after editing it.
 
 ## Templates
 

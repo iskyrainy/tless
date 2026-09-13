@@ -3,9 +3,11 @@ use std::{env, path::PathBuf, sync::LazyLock};
 use tracing_subscriber::EnvFilter;
 
 pub mod cmd;
+pub(crate) mod config;
 pub mod error;
 pub(crate) mod file;
 pub(crate) mod server;
+pub(crate) mod util;
 
 /// Working directory the application runs from.
 pub(crate) static BASE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
