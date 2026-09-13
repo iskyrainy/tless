@@ -1,10 +1,8 @@
-use std::env;
-
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use tracing::info;
 
-use crate::{error::AppError, file, server};
+use crate::{BASE_DIR, error::AppError, file, server};
 
 /// tless command arguments
 #[derive(Parser, Debug)]
@@ -164,7 +162,7 @@ pub fn parse_cmd() -> Result<(), AppError> {
                 clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
             ) =>
         {
-            print!("{e}");
+            println!("{e}");
             return Ok(());
         }
         Err(e) => return Err(AppError::usage(e.to_string())),
@@ -178,12 +176,11 @@ pub fn parse_cmd() -> Result<(), AppError> {
 }
 
 fn handle_server(server: Server) -> Result<()> {
-    let current_dir = env::current_dir().context("Cannot get current directory")?;
-    if !current_dir.join("tless.toml").exists() {
+    if !BASE_DIR.join("tless.toml").exists() {
         bail!("tless.toml not found in current directory");
     }
     if server.run && (1025..=65534).contains(&server.port) {
-        server::run(server.port).context("Failed to start server")?;
+        server::run(server.port)?;
     } else {
         bail!("Server not started. Use -r to run the server. Port must be between 1025 and 65534.");
     }
@@ -192,18 +189,16 @@ fn handle_server(server: Server) -> Result<()> {
 
 fn handle_blog(blog: Blog) -> Result<()> {
     match &blog.cli {
-        BlogArgs::Add { name } => file::Blog::add(name).context("Failed to add blog"),
-        BlogArgs::Remove { class, name } => {
-            file::Blog::remove(name, class).context("Failed to remove blog")
-        }
-        BlogArgs::Publish { name } => file::Blog::publish(name).context("Failed to publish blog"),
+        BlogArgs::Add { name } => file::Blog::add(name),
+        BlogArgs::Remove { class, name } => file::Blog::remove(name, class),
+        BlogArgs::Publish { name } => file::Blog::publish(name),
     }
 }
 
 fn handle_page(page: Page) -> Result<()> {
     match &page.cli {
-        PageArgs::Add { name } => file::Page::add(name).context("Failed to add page"),
-        PageArgs::Remove { name } => file::Page::remove(name).context("Failed to remove page"),
+        PageArgs::Add { name } => file::Page::add(name),
+        PageArgs::Remove { name } => file::Page::remove(name),
     }
 }
 
@@ -214,12 +209,13 @@ fn handle_site(site: Site) -> Result<()> {
         info!("Finish site structure...");
         Ok(())
     } else if site.generate {
-        info!("Generating static pages...");
-        let runtime = tokio::runtime::Runtime::new().context("Failed to create runtime")?;
-        runtime
-            .block_on(server::render_all())
-            .context("Failed to generate static pages")?;
-        info!("Generated static pages");
+        info!("Generating publish/ ...");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("Failed to create render runtime")?;
+        runtime.block_on(server::render_all())?;
+        info!("Generated public/");
         Ok(())
     } else {
         bail!("No valid site operation specified");

@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, bail};
 use arc_swap::ArcSwap;
 use chrono_tz::Tz;
 use notify::EventKind;
@@ -81,10 +81,7 @@ fn get_config_path() -> PathBuf {
 fn get_config_toml() -> Result<Config> {
     let config_path = get_config_path();
     if !config_path.exists() {
-        return Err(anyhow!(
-            "Configuration file not found at {}",
-            config_path.display()
-        ));
+        bail!("Configuration file not found at {}", config_path.display());
     }
     let config_content = fs::read_to_string(config_path)?;
     Ok(toml::from_str(&config_content)?)

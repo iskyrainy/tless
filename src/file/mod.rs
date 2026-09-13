@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +36,7 @@ impl Metadata {
 }
 
 /// Path to a source file (`source/<class>/<name>.md`).
+#[inline]
 pub(crate) fn get_path(name: &str, class: &str) -> PathBuf {
     BASE_DIR
         .join("source")
@@ -59,12 +60,16 @@ pub(crate) fn current_timestamp() -> String {
 
 /// Parse the frontmatter and file name of a source file into [Metadata].
 pub fn parse_file(path: &PathBuf) -> Result<(Metadata, String)> {
-    let mut file = fs::File::open(path)?;
+    let mut file =
+        fs::File::open(path).context(format!("Failed to open file: {}", path.display()))?;
     let mut text = String::new();
     if file.read_to_string(&mut text).is_err() {
-        return Err(anyhow!("Failed to read blog."));
+        bail!("Failed to read blog.");
     }
-    let (frontmatter, md_body) = frontmatter_gen::extract(&text)?;
+    let (frontmatter, md_body) = frontmatter_gen::extract(&text).context(format!(
+        "Failed to extract file frontmatter: {}",
+        path.display()
+    ))?;
     let mut metadata = Metadata::new();
     metadata.path = path.clone();
     if let Some(title) = frontmatter.get("title").and_then(|v| v.as_str()) {

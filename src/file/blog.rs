@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use crate::file::{ValidEntity, current_timestamp, get_path, is_file_exist, parse_file};
@@ -35,7 +35,8 @@ impl Blog {
     /// Add a new draft blog file.
     pub fn add(name: &str) -> Result<()> {
         let file_path = Self::validate_and_get_path(name)?;
-        fs::write(&file_path, Self::base_blog_text())?;
+        fs::write(&file_path, Self::base_blog_text())
+            .context(format!("Failed to create draft/: {}", file_path.display()))?;
         info!("Blog '{}' created in 'draft'", file_path.display());
         Ok(())
     }
@@ -57,7 +58,8 @@ impl Blog {
         if !is_file_exist(&file_path) {
             bail!("Blog does not exist.");
         }
-        fs::remove_file(&file_path)?;
+        fs::remove_file(&file_path)
+            .context(format!("Failed to remove draft/: {}", file_path.display()))?;
         info!("Blog '{}' removed from '{}'", name, class);
         Ok(())
     }
@@ -83,8 +85,10 @@ impl Blog {
             metadata.layout.unwrap_or("post.html".to_string()),
         );
         let content = format!("{}{}", frontmatter, md_body);
-        fs::write(&post_path, content)?;
-        fs::remove_file(&draft_path)?;
+        fs::write(&post_path, content)
+            .context(format!("Failed to create post/: {}", post_path.display()))?;
+        fs::remove_file(&draft_path)
+            .context(format!("Failed to remove draft/: {}", draft_path.display()))?;
         info!("Blog '{}' published from 'draft' to 'post'", name);
         Ok(())
     }

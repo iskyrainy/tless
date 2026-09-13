@@ -1,6 +1,6 @@
 use std::fs;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use crate::file::{ValidEntity, current_timestamp, get_path, is_file_exist};
@@ -35,11 +35,13 @@ impl Page {
     /// Add a new page file.
     pub fn add(name: &str) -> Result<()> {
         let file_path = Self::validate_and_get_path(name)?;
-        fs::write(&file_path, Self::base_page_text(name))?;
+        fs::write(&file_path, Self::base_page_text(name))
+            .context(format!("Failed to write new page: {}", file_path.display()))?;
         info!("Page '{}' created", file_path.display());
         Ok(())
     }
 
+    #[inline]
     fn base_page_text(name: &str) -> String {
         format!(
             "---\ntitle: {}\ndate: {}\nlayout: page.html\n---\n",
@@ -55,7 +57,8 @@ impl Page {
         if !is_file_exist(&file_path) {
             bail!("Page does not exist.");
         }
-        fs::remove_file(file_path)?;
+        fs::remove_file(&file_path)
+            .context(format!("Failed to remove page/: {}", file_path.display()))?;
         info!("Page '{}' removed", name);
         Ok(())
     }

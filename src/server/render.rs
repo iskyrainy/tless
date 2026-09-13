@@ -1,23 +1,24 @@
 use std::{
+    cmp::Reverse,
     fmt::Write,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local};
 use chrono_tz::Tz;
 use futures::{StreamExt, stream};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html};
-use tera::Context;
+use tera::Context as TeraContext;
 use tokio::{
     fs::{self, File},
     io::AsyncWriteExt,
 };
-use tracing::{error, info};
+use tracing::info;
 
 use crate::{
-    file::{self, Metadata},
+    file::{Metadata, parse_file},
     server::{
         SITE, Site, TERA, extract_root_path, get_layout_path, get_public_path, get_source_path,
         helper::slugify,
@@ -94,8 +95,10 @@ async fn render_file_class(metadata: &Metadata) -> Result<()> {
             let pub_dir = pub_dir.clone();
             async move {
                 let dst_dir = pub_dir.join("category").join(c);
-                fs::create_dir_all(&dst_dir).await?;
-                let mut context = Context::new();
+                fs::create_dir_all(&dst_dir)
+                    .await
+                    .context(format!("Failed to create public/category/{c}/"))?;
+                let mut context = TeraContext::new();
                 context.insert("site", SITE.load().as_ref());
                 context.insert("name", c);
                 context.insert("title", c);
@@ -108,16 +111,18 @@ async fn render_file_class(metadata: &Metadata) -> Result<()> {
                 context.insert("posts", &posts);
                 match TERA.load().render("category.html", &context) {
                     Ok(rendered) => {
-                        let mut file = File::create(dst_dir.join("index.html")).await?;
-                        file.write_all_buf(&mut rendered.as_bytes()).await?;
-                        file.flush().await?;
+                        let mut file = File::create(dst_dir.join("index.html"))
+                            .await
+                            .context(format!("Failed to create public/category/{c}/index.html"))?;
+                        file.write_all_buf(&mut rendered.as_bytes())
+                            .await
+                            .context(format!("Failed to write public/category/{c}/index.html"))?;
+                        file.flush()
+                            .await
+                            .context(format!("Failed to flush public/category/{c}/index.html"))?;
                     }
                     Err(e) => {
-                        return Err(anyhow!(
-                            "Failed to render {} category: {}",
-                            metadata.title,
-                            e
-                        ));
+                        bail!("Failed to render {} category: {}", metadata.title, e);
                     }
                 };
                 Ok(())
@@ -139,8 +144,10 @@ async fn render_file_class(metadata: &Metadata) -> Result<()> {
             let pub_dir = pub_dir.clone();
             async move {
                 let dst_dir = pub_dir.join("tag").join(c);
-                fs::create_dir_all(&dst_dir).await?;
-                let mut context = Context::new();
+                fs::create_dir_all(&dst_dir)
+                    .await
+                    .context(format!("Failed to create public/tag/{c}/"))?;
+                let mut context = TeraContext::new();
                 context.insert("site", SITE.load().as_ref());
                 context.insert("name", c);
                 context.insert("title", c);
@@ -153,12 +160,18 @@ async fn render_file_class(metadata: &Metadata) -> Result<()> {
                 context.insert("posts", &posts);
                 match TERA.load().render("tag.html", &context) {
                     Ok(rendered) => {
-                        let mut file = File::create(dst_dir.join("index.html")).await?;
-                        file.write_all_buf(&mut rendered.as_bytes()).await?;
-                        file.flush().await?;
+                        let mut file = File::create(dst_dir.join("index.html"))
+                            .await
+                            .context(format!("Failed to create public/tag/{c}/index.html"))?;
+                        file.write_all_buf(&mut rendered.as_bytes())
+                            .await
+                            .context(format!("Failed to write public/tag/{c}/index.html"))?;
+                        file.flush()
+                            .await
+                            .context(format!("Failed to flush public/tag/{c}/index.html"))?;
                     }
                     Err(e) => {
-                        return Err(anyhow!("Failed to render {} tag: {}", metadata.title, e));
+                        bail!("Failed to render {} tag: {}", metadata.title, e);
                     }
                 };
                 Ok(())
@@ -181,9 +194,9 @@ enum RenderType {
 
 #[inline]
 async fn render_file(src: &PathBuf, dst: &PathBuf, rt: RenderType) -> Result<()> {
-    let (metadata, md_body) = file::parse_file(src)?;
+    let (metadata, md_body) = parse_file(src)?;
     let md_html_str = render(&md_body);
-    let mut context = Context::new();
+    let mut context = TeraContext::new();
     context.insert("content", &md_html_str);
     context.insert("markdown", &md_body);
     context.insert("title", &metadata.title);
@@ -197,12 +210,18 @@ async fn render_file(src: &PathBuf, dst: &PathBuf, rt: RenderType) -> Result<()>
     });
     match TERA.load().render(layout, &context) {
         Ok(rendered) => {
-            let mut file = File::create(dst).await?;
-            file.write_all_buf(&mut rendered.as_bytes()).await?;
-            file.flush().await?;
+            let mut file = File::create(dst)
+                .await
+                .context(format!("Failed to create: {}", dst.display()))?;
+            file.write_all_buf(&mut rendered.as_bytes())
+                .await
+                .context(format!("Failed to write: {}", dst.display()))?;
+            file.flush()
+                .await
+                .context(format!("Failed to flush: {}", dst.display()))?;
         }
         Err(e) => {
-            return Err(anyhow!("Failed to render {}: {}", metadata.title, e));
+            bail!("Failed to render {}: {}", metadata.title, e);
         }
     };
     if let RenderType::Post = rt {
@@ -220,7 +239,9 @@ pub(crate) async fn render_post(paths: Vec<&PathBuf>) -> Result<()> {
                 if let Some(name) = path.file_stem() {
                     let name = name.to_string_lossy().to_string();
                     let dst_dir = pub_dir.join("post").join(&name);
-                    fs::create_dir_all(&dst_dir).await?;
+                    fs::create_dir_all(&dst_dir)
+                        .await
+                        .context(format!("Failed to create public/post/{name}/"))?;
                     let dst_file = dst_dir.join("index.html");
                     render_file(path, &dst_file, RenderType::Post).await?;
                 }
@@ -243,7 +264,9 @@ pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
                 if let Some(name) = path.file_stem() {
                     let name = name.to_string_lossy().to_string();
                     let dst_dir = pub_dir.join(&name);
-                    fs::create_dir_all(&dst_dir).await?;
+                    fs::create_dir_all(&dst_dir)
+                        .await
+                        .context(format!("Failed to create public/page/{name}/"))?;
                     let dst_file = dst_dir.join("index.html");
                     render_file(path, &dst_file, RenderType::Page).await?;
                 }
@@ -258,32 +281,48 @@ pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
 }
 
 async fn render_class() -> Result<()> {
-    let mut context = Context::new();
+    let mut context = TeraContext::new();
     context.insert("site", SITE.load().as_ref());
     context.insert("title", "Categories");
     let category_dir = get_public_path(".").join("category");
-    fs::create_dir_all(&category_dir).await?;
+    fs::create_dir_all(&category_dir)
+        .await
+        .context("Failed to create public/category/")?;
     match TERA.load().render("category-index.html", &context) {
         Ok(rendered) => {
-            let mut file = File::create(category_dir.join("index.html")).await?;
-            file.write_all_buf(&mut rendered.as_bytes()).await?;
-            file.flush().await?;
+            let mut file = File::create(category_dir.join("index.html"))
+                .await
+                .context("Failed to create public/category/index.html")?;
+            file.write_all_buf(&mut rendered.as_bytes())
+                .await
+                .context("Failed to write public/category/index.html")?;
+            file.flush()
+                .await
+                .context("Failed to flush public/category/index.html")?;
         }
         Err(e) => {
-            return Err(anyhow!("Failed to render category dir: {}", e));
+            bail!("Failed to render category dir: {}", e);
         }
     };
     context.insert("title", "Tags");
     let tag_dir = get_public_path(".").join("tag");
-    fs::create_dir_all(&tag_dir).await?;
+    fs::create_dir_all(&tag_dir)
+        .await
+        .context("Failed to create public/tag/")?;
     match TERA.load().render("tag-index.html", &context) {
         Ok(rendered) => {
-            let mut file = File::create(tag_dir.join("index.html")).await?;
-            file.write_all_buf(&mut rendered.as_bytes()).await?;
-            file.flush().await?;
+            let mut file = File::create(tag_dir.join("index.html"))
+                .await
+                .context("Failed to create public/tag/index.html")?;
+            file.write_all_buf(&mut rendered.as_bytes())
+                .await
+                .context("Failed to write public/tag/index.html")?;
+            file.flush()
+                .await
+                .context("Failed to flush public/tag/index.html")?;
         }
         Err(e) => {
-            return Err(anyhow!("Failed to render tag dir: {}", e));
+            bail!("Failed to render tag dir: {}", e);
         }
     };
     Ok(())
@@ -294,7 +333,11 @@ async fn copy_robots() -> Result<()> {
     let src = get_source_path(".").join("robots.txt");
     if src.exists() {
         let dst = get_public_path(".").join("robots.txt");
-        fs::copy(src, dst).await?;
+        fs::copy(&src, &dst).await.context(format!(
+            "Failed to copy from {} to {}",
+            src.display(),
+            dst.display()
+        ))?;
     }
     Ok(())
 }
@@ -410,7 +453,9 @@ async fn gen_atom_str() -> String {
 async fn gen_atom() -> Result<()> {
     let dst = get_public_path("atom.xml");
     let atom_str = gen_atom_str().await;
-    fs::write(dst, atom_str).await?;
+    fs::write(dst, atom_str)
+        .await
+        .context("Failed to write public/atom.xml")?;
     Ok(())
 }
 
@@ -452,7 +497,9 @@ async fn gen_sitemap_str() -> String {
 async fn gen_sitemap() -> Result<()> {
     let dst = get_public_path("sitemap.xml");
     let sitemap_str = gen_sitemap_str().await;
-    fs::write(dst, sitemap_str).await?;
+    fs::write(dst, sitemap_str)
+        .await
+        .context("Failed to write public/sitemap.xml")?;
     Ok(())
 }
 
@@ -489,8 +536,12 @@ pub async fn render_all() -> Result<()> {
 async fn remove_stale_outputs() -> Result<()> {
     let target = crate::BASE_DIR.join("public");
     if target.exists() {
-        fs::remove_dir_all(&target).await?;
-        fs::create_dir_all(&target).await?;
+        fs::remove_dir_all(&target)
+            .await
+            .context("Failed to remove public/")?;
+        fs::create_dir_all(&target)
+            .await
+            .context("Failed to create public/")?;
     }
     Ok(())
 }
@@ -505,7 +556,7 @@ async fn render_home(site: &Site) -> Result<()> {
         info!("Skipping home page");
         return Ok(());
     }
-    let mut context = Context::new();
+    let mut context = TeraContext::new();
     // empty values keep `{% if content %}` / `{% if title %}` blocks happy
     context.insert("content", "");
     context.insert("title", "");
@@ -513,24 +564,26 @@ async fn render_home(site: &Site) -> Result<()> {
     context.insert("site", site);
     match tera.render("index.html", &context) {
         Ok(rendered) => {
-            fs::write(get_public_path("index.html"), rendered).await?;
-            info!("Rendered index");
+            fs::write(get_public_path("index.html"), rendered)
+                .await
+                .context("Failed to write public/home/index.html")?;
+            info!("Render public/home/index.html");
         }
-        Err(e) => error!("Failed to render home page: {}", e),
+        Err(e) => bail!("Failed to render public/home/index.html: {}", e),
     }
     Ok(())
 }
 
 /// Posts from `source/post`, newest first, exposed to the home page template.
-fn recent_posts(site: &Site) -> Vec<file::Metadata> {
+fn recent_posts(site: &Site) -> Vec<Metadata> {
     let post_dir = get_source_path("post");
-    let mut posts: Vec<file::Metadata> = site
+    let mut posts = site
         .post
         .iter()
         .filter(|m| m.path.starts_with(&post_dir))
         .cloned()
-        .collect();
-    posts.sort_by_key(|p| std::cmp::Reverse(date_rank(&p.date)));
+        .collect::<Vec<_>>();
+    posts.sort_by_key(|p| Reverse(date_rank(&p.date)));
     posts
 }
 
@@ -555,15 +608,19 @@ fn copy_theme_resources() -> Result<()> {
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
+    std::fs::create_dir_all(dst).context(format!("Failed to create dir: {}", dst.display()))?;
+    for entry in std::fs::read_dir(src).context(format!("Failed to read dir: {}", src.display()))? {
+        let entry = entry.context("Failed to get theme entry")?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
         if from.is_dir() {
             copy_dir_recursive(&from, &to)?;
         } else {
-            std::fs::copy(&from, &to)?;
+            std::fs::copy(&from, &to).context(format!(
+                "Failed to copy from {} to {}",
+                from.display(),
+                to.display()
+            ))?;
         }
     }
     Ok(())
