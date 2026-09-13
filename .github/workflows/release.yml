@@ -38,7 +38,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.create-release.outputs.build_matrix) }}
+        include:
+          - os: windows-latest
+            artifact_name: tles-windows-x86_64
+            cargo_target: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            artifact_name: tles-linux-x86_64
+            cargo_target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            artifact_name: tles-linux-aarch64
+            cargo_target: aarch64-unknown-linux-gnu
+            linker: gcc-aarch64-linux-gnu
+          - os: macos-latest
+            artifact_name: tles-macos-x86_64
+            cargo_target: x86_64-apple-darwin
+          - os: macos-latest
+            artifact_name: tles-macos-aarch64
+            cargo_target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
 
