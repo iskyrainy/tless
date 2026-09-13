@@ -1,3 +1,6 @@
+//! Site rendering: markdown to HTML, layout rendering, and every generated
+//! output (pages, taxonomies, feed and sitemap).
+
 use std::{
     cmp::Reverse,
     collections::HashMap,
@@ -77,6 +80,7 @@ fn add_heading_ids(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
 }
 
 #[inline]
+/// Worker count for the concurrent render pipelines.
 fn get_cpu() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
@@ -148,6 +152,7 @@ async fn render_terms(
 }
 
 #[inline]
+/// Render the category and tag pages of one post.
 async fn render_file_class(metadata: &Metadata) -> Result<()> {
     let site = SITE.load();
     render_terms(
@@ -167,6 +172,8 @@ enum RenderType {
 }
 
 #[inline]
+/// Render one source file through its layout (frontmatter `layout`, else the
+/// render-type default) into `dst`. Posts additionally emit taxonomy pages.
 async fn render_file(src: &Path, dst: &Path, rt: RenderType) -> Result<()> {
     let (metadata, md_body) = parse_file(src)?;
     let md_html_str = render(&md_body);
@@ -204,6 +211,7 @@ async fn render_file(src: &Path, dst: &Path, rt: RenderType) -> Result<()> {
     Ok(())
 }
 
+/// Render posts to `public/post/<name>/index.html`.
 pub(crate) async fn render_post(paths: Vec<&PathBuf>) -> Result<()> {
     let pub_dir = Arc::new(get_public_path("."));
     stream::iter(paths)
@@ -229,6 +237,7 @@ pub(crate) async fn render_post(paths: Vec<&PathBuf>) -> Result<()> {
         .collect::<Result<()>>()
 }
 
+/// Render pages to `public/<name>/index.html`.
 pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
     let pub_dir = Arc::new(get_public_path("."));
     stream::iter(paths)
@@ -254,6 +263,7 @@ pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
         .collect::<Result<()>>()
 }
 
+/// Render the tag and category index pages.
 async fn render_class() -> Result<()> {
     let mut context = TeraContext::new();
     context.insert("site", SITE.load().as_ref());
@@ -303,6 +313,7 @@ async fn render_class() -> Result<()> {
 }
 
 #[inline]
+/// Copy `source/robots.txt` into the build output when present.
 async fn copy_robots() -> Result<()> {
     let src = get_source_path(".").join("robots.txt");
     if src.exists() {
@@ -317,6 +328,7 @@ async fn copy_robots() -> Result<()> {
 }
 
 #[inline]
+/// Escape text for XML element and attribute content.
 fn escape_xml(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -326,6 +338,7 @@ fn escape_xml(text: &str) -> String {
 }
 
 #[inline]
+/// Truncate to `max_chars` characters, appending `…` when shortened.
 fn truncate_chars(s: &str, max_chars: usize) -> String {
     let mut out: String = s.chars().take(max_chars).collect();
     if s.chars().count() > max_chars {
@@ -334,6 +347,7 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
     out
 }
 
+/// Build the Atom feed for all posts.
 async fn gen_atom_str() -> String {
     let site = SITE.load();
     let mut xml = String::with_capacity(409600);
@@ -424,6 +438,7 @@ async fn gen_atom_str() -> String {
     xml
 }
 
+/// Write `public/atom.xml`.
 async fn gen_atom() -> Result<()> {
     let dst = get_public_path("atom.xml");
     let atom_str = gen_atom_str().await;
@@ -433,6 +448,7 @@ async fn gen_atom() -> Result<()> {
     Ok(())
 }
 
+/// Build the sitemap for all posts.
 async fn gen_sitemap_str() -> String {
     let site = SITE.load();
     let mut xml = String::with_capacity(40960);
@@ -468,6 +484,7 @@ async fn gen_sitemap_str() -> String {
     xml
 }
 
+/// Write `public/sitemap.xml`.
 async fn gen_sitemap() -> Result<()> {
     let dst = get_public_path("sitemap.xml");
     let sitemap_str = gen_sitemap_str().await;
@@ -477,36 +494,26 @@ async fn gen_sitemap() -> Result<()> {
     Ok(())
 }
 
-/// Render the whole site to the public dir: every post and page, the home
-/// page, and the active theme's static resources.
+/// Render the whole site into `public/`: posts, pages, taxonomies, the home
+/// page, theme assets, feed and sitemap.
 pub async fn render_all() -> Result<()> {
     let site = SITE.load();
-    // remove old
+    // start from a clean build directory
     remove_stale_outputs().await?;
-
-    // gen assets
     copy_theme_resources()?;
-
     copy_robots().await?;
 
-    // gen home: index
     render_home(&site).await?;
-
-    // render categorie/tag dir
     render_class().await?;
-
-    // render posts/pages
     render_post(site.post.iter().map(|d| &d.path).collect::<Vec<_>>()).await?;
     render_page(site.page.iter().map(|d| &d.path).collect::<Vec<_>>()).await?;
 
-    // gen atom.xml sitemap.xml
     gen_atom().await?;
     gen_sitemap().await?;
     Ok(())
 }
 
-/// Remove public files whose source was deleted, keeping the deployed site
-/// in sync with the sources.
+/// Wipe the previous build output so every run starts clean.
 async fn remove_stale_outputs() -> Result<()> {
     let target = crate::BASE_DIR.join("public");
     if target.exists() {
@@ -571,7 +578,7 @@ fn date_rank(date: &str) -> DateTime<Tz> {
         .unwrap_or(DateTime::<Tz>::MIN_UTC.with_timezone(&tz))
 }
 
-/// Copy the active theme's `resource/` directory into `public/`.
+/// Copy the active theme's `assets/` directory into `public/assets/`.
 fn copy_theme_resources() -> Result<()> {
     let resource_dir = get_layout_path().join("assets");
     if !resource_dir.exists() {
@@ -580,6 +587,7 @@ fn copy_theme_resources() -> Result<()> {
     copy_dir_recursive(&resource_dir, &get_public_path("assets"))
 }
 
+/// Recursively copy the `src` tree into `dst`.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst).context(format!("Failed to create dir: {}", dst.display()))?;
     for entry in std::fs::read_dir(src).context(format!("Failed to read dir: {}", src.display()))? {

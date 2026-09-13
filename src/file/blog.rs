@@ -1,3 +1,5 @@
+//! Draft and post file handling behind `tless blog`.
+
 use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};

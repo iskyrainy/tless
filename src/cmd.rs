@@ -1,10 +1,12 @@
+//! Command line interface: argument parsing and subcommand dispatch.
+
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use tracing::info;
 
 use crate::{BASE_DIR, error::AppError, file, server};
 
-/// tless command arguments
+/// Tless command arguments.
 #[derive(Parser, Debug)]
 #[command(
     author = "gdhvxcj <wangnan5117@gmail.com>",
@@ -20,35 +22,35 @@ struct Command {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Subcommand that run tless server and specify port
+    /// Run the Tless server and specify the port
     Server(Server),
 
-    /// Subcommand that controls blog's `add/remove/publish`
+    /// Control blog drafts and posts: add/remove/publish
     Blog(Blog),
 
-    /// Subcommand that controls page `add/remove/publish`
+    /// Control pages: add/remove
     Page(Page),
 
-    /// Subcommand that generates static pages, deploy to github page, backup site, etc.
+    /// Initialize a site scaffold or generate the static site
     Site(Site),
 }
 
 #[derive(Args, Debug)]
 struct Server {
-    /// Run Tless server.
+    /// Run the Tless server.
     ///
     /// usage:
     /// ```bash
-    /// tless server -r
+    /// tles server -r
     /// ```
     #[clap(short, long)]
     run: bool,
 
-    /// Port that server binding.
+    /// Port the server binds to.
     ///
     /// usage:
     /// ```bash
-    /// tless server -r -p 12345
+    /// tles server -r -p 12345
     /// ```
     #[clap(short, long, default_value_t = 8917)]
     port: u16,
@@ -63,12 +65,12 @@ struct Blog {
 #[derive(Subcommand, Debug, Clone)]
 enum BlogArgs {
     /// Add a draft blog.
-    /// If file exists, print failed.
+    /// Fails if the file already exists.
     ///
     /// usage:
     /// ```bash
     /// # add a draft blog named 'FirstBlog'
-    /// tless blog add FirstBlog
+    /// tles blog add FirstBlog
     /// ```
     Add { name: String },
 
@@ -77,10 +79,10 @@ enum BlogArgs {
     /// usage:
     /// ```bash
     /// # remove draft/FirstBlog
-    /// tless blog remove FirstBlog
+    /// tles blog remove FirstBlog
     ///
-    /// # remove private post/Blog
-    /// tless blog remove -c post -p Blog
+    /// # remove a post named 'Blog'
+    /// tles blog remove -c post Blog
     /// ```
     Remove {
         #[arg(short, long, default_value = "draft")]
@@ -90,12 +92,12 @@ enum BlogArgs {
     },
 
     /// Publish a draft to post.
-    /// If file not exists, print failed.
+    /// Fails if the draft does not exist.
     ///
     /// usage:
     /// ```bash
     /// # publish draft/FirstBlog to post/FirstBlog as public post
-    /// tless blog publish FirstBlog
+    /// tles blog publish FirstBlog
     /// ```
     Publish { name: String },
 }
@@ -109,22 +111,22 @@ struct Page {
 #[derive(Subcommand, Debug, Clone)]
 enum PageArgs {
     /// Add a page named `name`.
-    /// If page exists, print failed.
+    /// Fails if the page already exists.
     ///
     /// usage:
     /// ```bash
     /// # add a page named 'tags'
-    /// tless page add tags
+    /// tles page add tags
     /// ```
     Add { name: String },
 
     /// Remove page named `name`.
-    /// If page not exists, print failed.
+    /// Fails if the page does not exist.
     ///
     /// usage:
     /// ```bash
     /// # remove a page named 'tags'
-    /// tless page remove tags
+    /// tles page remove tags
     /// ```
     Remove { name: String },
 }
@@ -136,7 +138,7 @@ struct Site {
     ///
     /// usage:
     /// ```bash
-    /// tless site -i
+    /// tles site -i
     /// ```
     #[clap(short, long)]
     init: bool,
@@ -145,7 +147,7 @@ struct Site {
     ///
     /// usage:
     /// ```bash
-    /// tless site -g
+    /// tles site -g
     /// ```
     #[clap(short, long)]
     generate: bool,

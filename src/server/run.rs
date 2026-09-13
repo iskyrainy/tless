@@ -1,3 +1,5 @@
+//! Development HTTP server: static file routes over `public/`.
+
 use std::path::{Path, PathBuf};
 
 use actix_web::{App, HttpResponse, HttpServer, Responder, get, web};
@@ -7,11 +9,12 @@ use tracing::{info, warn};
 
 use crate::server::{self, get_public_path, render};
 
+/// Render the site once, then serve `public/` while watching for changes.
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 pub async fn run(port: u16) -> Result<()> {
     let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
 
-    // Render all posts
+    // Render the whole site before serving
     render::render_all().await?;
 
     let server = init_server(port, shutdown_tx.clone())?;
@@ -24,6 +27,7 @@ pub async fn run(port: u16) -> Result<()> {
     Ok(())
 }
 
+/// Build the actix-web server with graceful ctrl-c shutdown.
 fn init_server(
     port: u16,
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
@@ -56,6 +60,7 @@ async fn get_static_files(path: web::Path<String>) -> impl Responder {
     get_static_file(path).await
 }
 
+/// Serve one file from `public/`.
 async fn get_static_file(path: String) -> impl Responder {
     let safe_path = match validate_and_get_path(&path) {
         Ok(path) => path,

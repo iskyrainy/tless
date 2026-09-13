@@ -1,3 +1,5 @@
+//! Server state: the site model, the template engine and the file watchers.
+
 use std::{
     collections::HashMap,
     fs,
@@ -60,10 +62,10 @@ impl Site {
     }
 }
 
-/// Store class info, class can be categories or tags.
+/// A taxonomy term (category or tag) and the posts filed under it.
 /// # Fields
-/// * `path` - Class url, normally as the `/self.name`.
-/// * `posts` - List of posts that belong to this class.
+/// * `path` - URL path of the term, e.g. `/tag/rust`.
+/// * `posts` - Posts belonging to this term.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct ClassMap {
     pub path: String,
@@ -77,6 +79,7 @@ pub(crate) fn get_source_path<'a, S: Into<&'a str>>(name: S) -> PathBuf {
 }
 
 #[inline]
+/// Path part of a site URL, e.g. `/blog` for `https://example.com/blog`.
 pub(crate) fn extract_root_path(url: &str) -> String {
     if url.is_empty() {
         return String::new();
@@ -184,6 +187,7 @@ pub(crate) static SITE: LazyLock<ArcSwap<Site>> = LazyLock::new(|| {
     ArcSwap::from_pointee(site)
 });
 
+/// Re-render changed sources and reload the site model.
 async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
     // notify-debouncer-full debounce window size: 1000ms
     let (tx, mut rx) = mpsc::channel(1000);
@@ -244,6 +248,7 @@ async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
 }
 
 #[inline]
+/// Directory of the theme selected in `[site] theme`.
 pub(crate) fn get_layout_path() -> PathBuf {
     let dir = BASE_DIR.join("theme").join(&SITE.load().config.theme);
     if dir.exists() {
@@ -266,6 +271,7 @@ pub(crate) static TERA: LazyLock<ArcSwap<Tera>> = LazyLock::new(|| {
     ArcSwap::from_pointee(tera)
 });
 
+/// Reload templates and re-render the site when the theme changes.
 async fn watch_layout(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
     let theme_path = get_layout_path();
 
@@ -325,10 +331,12 @@ async fn watch_layout(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
 }
 
 #[inline]
+/// Path inside the generated `public/` directory.
 pub(crate) fn get_public_path<'a, S: Into<&'a str>>(name: S) -> PathBuf {
     BASE_DIR.join("public").join(name.into())
 }
 
+/// Recompile Rhai helpers when the helper directory changes.
 async fn watch_helper(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
     let helper_path = BASE_DIR.join("helper");
 
@@ -388,9 +396,7 @@ async fn watch_logged(name: &str, watch: impl Future<Output = Result<()>>) {
     }
 }
 
-/// Start watching.
-/// # Arguments
-/// * `shutdown_tx` - Subscribe the sender to recv a shutdown signal.
+/// Run all file watchers until a shutdown signal is received.
 pub(crate) async fn start_watch(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
     let _ = join! {
         watch_logged("source", watch_source(shutdown_tx.subscribe())),

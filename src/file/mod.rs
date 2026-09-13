@@ -45,7 +45,8 @@ pub(crate) fn current_timestamp() -> String {
     Utc::now().with_timezone(&config::zone()).to_rfc3339()
 }
 
-/// Parse the frontmatter and file name of a source file into [Metadata].
+/// Parse a source file into [Metadata] and its markdown body (frontmatter
+/// stripped). The title falls back to the file name when not set.
 pub fn parse_file(path: &Path) -> Result<(Metadata, String)> {
     let mut file =
         fs::File::open(path).context(format!("Failed to open file: {}", path.display()))?;
@@ -93,7 +94,9 @@ pub fn parse_file(path: &Path) -> Result<(Metadata, String)> {
     Ok((metadata, md_body.to_string()))
 }
 
+/// A source entity (blog, page, ...) addressed by a user-supplied name.
 pub(crate) trait ValidEntity {
+    /// Resolve the entity's file path, failing when the target already exists.
     fn validate_and_get_path(name: &str) -> Result<PathBuf>;
 
     /// Reject empty or oversized names and return their slug.

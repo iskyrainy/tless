@@ -31,7 +31,7 @@ pub(crate) fn register_helpers(tera: &mut Tera) {
 /// Fallback amount for list helpers when no `amount` arg is given (effectively unlimited).
 const DEFAULT_AMOUNT: usize = 1 << 16;
 
-/// Parse a date string as RFC3339 format used by the CLI.
+/// Parse RFC3339 or the CLI `%Y-%m-%d %H:%M:%S` format, falling back to now.
 fn parse_datetime(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
@@ -282,6 +282,8 @@ fn class_of(map: &Map, key: &str, default: &str) -> String {
         .to_string()
 }
 
+/// Shared implementation of the `list_category` / `list_tag` / `list_post` /
+/// `list_page` template functions.
 fn list_call(kwargs: Kwargs, kind: ListKind) -> TeraResult<Value> {
     let orderby = kwargs
         .get::<String>("orderby")?
@@ -598,6 +600,7 @@ fn toc_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
     Ok(Value::safe_string(&html))
 }
 
+/// Group the integer part of a number with `separator` every three digits.
 fn format_number_with_separator(value: &str, separator: &str) -> String {
     let value = value.trim();
     if value.is_empty() {
@@ -638,6 +641,7 @@ fn level_to_usize(level: HeadingLevel) -> usize {
     }
 }
 
+/// Template `slugify()`; see [crate::util::slugify] for the algorithm.
 fn to_slug(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
     let input = kwargs.must_get::<String>("str")?;
     Ok(Value::normal_string(&slugify(input.as_str())))
@@ -663,6 +667,7 @@ const MAX_OPERATIONS: u64 = 1_000_000;
 const MAX_EXPR_DEPTHS: (usize, usize) = (32, 64);
 const MAX_CALL_LEVELS: usize = 64;
 
+/// Convert a template value into a Rhai dynamic for helper scripts.
 fn value_to_dynamic(v: &Value) -> Dynamic {
     if v.is_none() {
         return Dynamic::UNIT;
@@ -698,6 +703,7 @@ fn value_to_dynamic(v: &Value) -> Dynamic {
     Dynamic::UNIT
 }
 
+/// Convert a Rhai result back into a template value.
 fn dynamic_to_value(res: Dynamic) -> Value {
     if res.is::<String>() {
         Value::normal_string(&res.cast::<String>())
@@ -723,6 +729,7 @@ fn dynamic_to_value(res: Dynamic) -> Value {
     }
 }
 
+/// Call the script's `fn main(args)`, passing all template kwargs as one map.
 fn rhai_call(kwargs: Kwargs, engine: &Engine, ast: &AST) -> TeraResult<Value> {
     let mut scope = rhai::Scope::new();
     // all template call args are passed to `fn main(args)` as one map

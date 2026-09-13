@@ -1,3 +1,5 @@
+//! Page file handling behind `tless page`.
+
 use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
