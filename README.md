@@ -47,7 +47,7 @@ tles site -g
 
 `tles site -i` produces a self-contained, deploy-ready repository:
 
-```
+```text
 .github/workflows/deploy.yml   # GitHub Pages deployment
 .gitignore
 tless.toml                     # site configuration
