@@ -1,3 +1,5 @@
+//! Development HTTP server: static file routes over `public/`.
+
 use std::path::{Path, PathBuf};
 
 use actix_web::{App, HttpResponse, HttpServer, Responder, get, web};
@@ -7,14 +9,13 @@ use tracing::{info, warn};
 
 use crate::server::{self, get_public_path, render};
 
+/// Render the site once, then serve `public/` while watching for changes.
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 pub async fn run(port: u16) -> Result<()> {
     let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
 
-    // Render all posts
-    render::render_all()
-        .await
-        .context("Failed to render posts")?;
+    // Render the whole site before serving
+    render::render_all().await?;
 
     let server = init_server(port, shutdown_tx.clone())?;
 
@@ -26,10 +27,11 @@ pub async fn run(port: u16) -> Result<()> {
     Ok(())
 }
 
+/// Build the actix-web server with graceful ctrl-c shutdown.
 fn init_server(
     port: u16,
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
-) -> std::io::Result<actix_web::dev::Server> {
+) -> Result<actix_web::dev::Server> {
     let server = HttpServer::new(|| App::new().service(hi).service(get_static_files))
         .shutdown_signal(async move {
             // Wait ctrl_c for quit gracefully
@@ -40,7 +42,8 @@ fn init_server(
             info!("Received exit signal, shutting down...");
         })
         .shutdown_timeout(60)
-        .bind(("0.0.0.0", port))?
+        .bind(("0.0.0.0", port))
+        .context(format!("Failed to bind port: {port}"))?
         .run();
     Ok(server)
 }
@@ -57,11 +60,12 @@ async fn get_static_files(path: web::Path<String>) -> impl Responder {
     get_static_file(path).await
 }
 
+/// Serve one file from `public/`.
 async fn get_static_file(path: String) -> impl Responder {
     let safe_path = match validate_and_get_path(&path) {
         Ok(path) => path,
         Err(e) => {
-            warn!("BadRequest: request name: {}, error info: {}", path, e);
+            warn!("BadRequest: request file name: {}, error info: {}", path, e);
             return HttpResponse::BadRequest().body("Invalid target");
         }
     };
@@ -75,6 +79,7 @@ async fn get_static_file(path: String) -> impl Responder {
 
 /// Resolve a request path inside `public/`, rejecting traversal attempts and
 /// hidden files such as the `.post_hash.json` cache.
+#[inline]
 fn validate_and_get_path(path: &str) -> Result<PathBuf, &'static str> {
     // the site root is the home page
     let path = if path.is_empty() { "index.html" } else { path };
@@ -100,6 +105,7 @@ fn validate_and_get_path(path: &str) -> Result<PathBuf, &'static str> {
     }
 }
 
+#[inline]
 fn content_type(path: &str) -> &'static str {
     match Path::new(path).extension().and_then(|e| e.to_str()) {
         // extensionless files are rendered HTML pages

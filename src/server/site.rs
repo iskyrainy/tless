@@ -1,3 +1,5 @@
+//! Site scaffold generation for `tless site -i`.
+
 use std::{env, fs};
 
 use anyhow::{Context, Result, bail};

@@ -9,7 +9,7 @@
 server with hot reload, a minimal theme with dark mode, and a scaffolded GitHub Actions
 workflow, so the whole flow is `write → preview → push`.
 
-## Features
+## Functions
 
 - **Tera templates** — [tera 2](https://github.com/Keats/tera) layouts with built-in helpers for
   TOC, pagination, Open Graph, tag/category lists and more.
@@ -17,7 +17,7 @@ workflow, so the whole flow is `write → preview → push`.
 - **Taxonomies** — tag and category pages (plus index pages) are generated automatically.
 - **Feeds & SEO** — `atom.xml`, `sitemap.xml` and `robots.txt` are built in.
 - **Rhai helper scripts** — extend your templates with sandboxed scripts dropped into `helper/`.
-- **Deploy-ready scaffold** — `tless site -i` writes the config, theme, `.gitignore` and the
+- **Deploy-ready scaffold** — `tles site -i` writes the config, theme, `.gitignore` and the
   GitHub Pages workflow for you.
 
 ## Quick start
@@ -47,7 +47,7 @@ tles site -g
 
 `tles site -i` produces a self-contained, deploy-ready repository:
 
-```
+```text
 .github/workflows/deploy.yml   # GitHub Pages deployment
 .gitignore
 tless.toml                     # site configuration
@@ -77,7 +77,7 @@ description = "A fast blog powered by Tless."
 rights = "My Tless Site"
 author = "Your Name"
 url = "http://127.0.0.1:8917"
-zone = "UTC"
+zone = "Asia/Shanghai"
 theme = "base"
 favicon = ""
 menu = [
@@ -87,7 +87,7 @@ menu = [
 ]
 ```
 
-Changing `tless.toml` while the dev server runs reloads the configuration — and the whole site.
+`tless.toml` is read at startup and on every rebuild — restart the dev server after editing it.
 
 ## Templates
 

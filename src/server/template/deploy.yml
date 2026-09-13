@@ -29,7 +29,7 @@ jobs:
         run: cargo install --git https://github.com/iskyrainy/tless --locked
 
       - name: Build static site
-        run: tless site -g
+        run: tles site -g
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

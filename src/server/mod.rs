@@ -1,3 +1,5 @@
+//! Server state: the site model, the template engine and the file watchers.
+
 use std::{
     collections::HashMap,
     fs,
@@ -7,9 +9,8 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use arc_swap::ArcSwap;
-use chrono_tz::Tz;
 use notify::EventKind;
 use notify_debouncer_full::{DebouncedEvent, new_debouncer};
 use serde::{Deserialize, Serialize};
@@ -18,7 +19,9 @@ use tokio::{join, select, sync::mpsc};
 use tracing::{error, info};
 
 use crate::{
-    BASE_DIR, error,
+    BASE_DIR, config,
+    config::SiteConfig,
+    error,
     file::{Metadata, parse_file},
 };
 
@@ -31,64 +34,6 @@ mod template;
 pub use render::render_all;
 pub use run::run;
 pub use site::init;
-
-/// Configuration structure for the application.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct Config {
-    pub site: SiteConfig,
-}
-
-/// Part of `[site]` configuration details.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub(crate) struct SiteConfig {
-    pub title: String,
-    pub subtitle: String,
-    pub description: String,
-    pub rights: String,
-    pub author: String,
-    pub url: String,
-    pub zone: String,
-    pub theme: String,
-    pub favicon: String,
-    pub menu: Vec<Menu>,
-    #[serde(skip)]
-    inner_zone: Option<Tz>,
-}
-
-impl Site {
-    pub fn get_zone(&self) -> Tz {
-        self.config.inner_zone.unwrap_or_default()
-    }
-}
-
-/// Menu item structure for site navigation.
-/// # Fields
-/// * `name` - The display name of the menu item.
-/// * `link` - The URL or path the menu item points to.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct Menu {
-    pub name: String,
-    pub link: String,
-}
-
-/// Get the path to the configuration file (`tless.toml`) in the current directory.
-#[inline]
-fn get_config_path() -> PathBuf {
-    BASE_DIR.join("tless.toml")
-}
-
-/// Load `tless.toml` to `CONFIG`.
-fn get_config_toml() -> Result<Config> {
-    let config_path = get_config_path();
-    if !config_path.exists() {
-        return Err(anyhow!(
-            "Configuration file not found at {}",
-            config_path.display()
-        ));
-    }
-    let config_content = fs::read_to_string(config_path)?;
-    Ok(toml::from_str(&config_content)?)
-}
 
 /// Struct of global source info, including `post`, `page`.
 /// # Fields
@@ -117,10 +62,10 @@ impl Site {
     }
 }
 
-/// Store class info, class can be categories or tags.
+/// A taxonomy term (category or tag) and the posts filed under it.
 /// # Fields
-/// * `path` - Class url, normally as the `/self.name`.
-/// * `posts` - List of posts that belong to this class.
+/// * `path` - URL path of the term, e.g. `/tag/rust`.
+/// * `posts` - Posts belonging to this term.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct ClassMap {
     pub path: String,
@@ -134,6 +79,7 @@ pub(crate) fn get_source_path<'a, S: Into<&'a str>>(name: S) -> PathBuf {
 }
 
 #[inline]
+/// Path part of a site URL, e.g. `/blog` for `https://example.com/blog`.
 pub(crate) fn extract_root_path(url: &str) -> String {
     if url.is_empty() {
         return String::new();
@@ -151,11 +97,8 @@ fn get_site() -> Site {
     let post_dir = get_source_path("post");
     let page_dir = get_source_path("page");
     let mut site = Site::new();
-    site.config = match get_config_toml() {
-        Ok(mut config) => {
-            config.site.inner_zone = config.site.zone.trim().parse::<Tz>().ok();
-            config.site
-        }
+    site.config = match config::load() {
+        Ok(config) => config.site,
         Err(e) => error::fatal(format!("{e:#}")),
     };
 
@@ -244,6 +187,7 @@ pub(crate) static SITE: LazyLock<ArcSwap<Site>> = LazyLock::new(|| {
     ArcSwap::from_pointee(site)
 });
 
+/// Re-render changed sources and reload the site model.
 async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
     // notify-debouncer-full debounce window size: 1000ms
     let (tx, mut rx) = mpsc::channel(1000);
@@ -304,6 +248,7 @@ async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
 }
 
 #[inline]
+/// Directory of the theme selected in `[site] theme`.
 pub(crate) fn get_layout_path() -> PathBuf {
     let dir = BASE_DIR.join("theme").join(&SITE.load().config.theme);
     if dir.exists() {
@@ -326,6 +271,7 @@ pub(crate) static TERA: LazyLock<ArcSwap<Tera>> = LazyLock::new(|| {
     ArcSwap::from_pointee(tera)
 });
 
+/// Reload templates and re-render the site when the theme changes.
 async fn watch_layout(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
     let theme_path = get_layout_path();
 
@@ -385,10 +331,12 @@ async fn watch_layout(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
 }
 
 #[inline]
+/// Path inside the generated `public/` directory.
 pub(crate) fn get_public_path<'a, S: Into<&'a str>>(name: S) -> PathBuf {
     BASE_DIR.join("public").join(name.into())
 }
 
+/// Recompile Rhai helpers when the helper directory changes.
 async fn watch_helper(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
     let helper_path = BASE_DIR.join("helper");
 
@@ -448,9 +396,7 @@ async fn watch_logged(name: &str, watch: impl Future<Output = Result<()>>) {
     }
 }
 
-/// Start watching.
-/// # Arguments
-/// * `shutdown_tx` - Subscribe the sender to recv a shutdown signal.
+/// Run all file watchers until a shutdown signal is received.
 pub(crate) async fn start_watch(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
     let _ = join! {
         watch_logged("source", watch_source(shutdown_tx.subscribe())),

@@ -1,3 +1,5 @@
+//! Binary entry point: run the CLI and map errors to process exit codes.
+
 use std::process::ExitCode;
 
 use tracing::error;

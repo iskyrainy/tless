@@ -1,27 +1,33 @@
+//! Site rendering: markdown to HTML, layout rendering, and every generated
+//! output (pages, taxonomies, feed and sitemap).
+
 use std::{
+    cmp::Reverse,
+    collections::HashMap,
     fmt::Write,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local};
 use chrono_tz::Tz;
 use futures::{StreamExt, stream};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html};
-use tera::Context;
+use tera::Context as TeraContext;
 use tokio::{
     fs::{self, File},
     io::AsyncWriteExt,
 };
-use tracing::{error, info};
+use tracing::info;
 
 use crate::{
-    file::{self, Metadata},
+    file::{Metadata, parse_file},
     server::{
-        SITE, Site, TERA, extract_root_path, get_layout_path, get_public_path, get_source_path,
-        helper::slugify,
+        ClassMap, SITE, Site, TERA, extract_root_path, get_layout_path, get_public_path,
+        get_source_path,
     },
+    util::slugify,
 };
 
 /// Markdown default render options.
@@ -74,6 +80,7 @@ fn add_heading_ids(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
 }
 
 #[inline]
+/// Worker count for the concurrent render pipelines.
 fn get_cpu() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
@@ -81,96 +88,81 @@ fn get_cpu() -> usize {
         * 2
 }
 
+/// Render one page per term (`category.html` / `tag.html`) for the terms of
+/// `metadata`, skipping terms that already have a page in this build.
+async fn render_terms(
+    terms: Option<&[String]>,
+    classes: &HashMap<String, ClassMap>,
+    dir: &str,
+    layout: &str,
+) -> Result<()> {
+    let Some(terms) = terms else {
+        return Ok(());
+    };
+    let out_root = Arc::new(get_public_path(dir));
+    stream::iter(
+        terms
+            .iter()
+            .filter(|term| !out_root.join(term.as_str()).exists()),
+    )
+    .map(|term| {
+        let out_root = out_root.clone();
+        async move {
+            let dst_dir = out_root.join(term);
+            fs::create_dir_all(&dst_dir).await?;
+            let posts = classes
+                .get(term)
+                .map(|class| class.posts.clone())
+                .unwrap_or_default();
+            let mut context = TeraContext::new();
+            context.insert("site", SITE.load().as_ref());
+            context.insert("name", term);
+            context.insert("title", term);
+            context.insert("posts", &posts);
+            match TERA.load().render(layout, &context) {
+                Ok(rendered) => {
+                    let mut file =
+                        File::create(dst_dir.join("index.html"))
+                            .await
+                            .context(format!(
+                                "Failed to create index.html in {}",
+                                dst_dir.display()
+                            ))?;
+                    file.write_all_buf(&mut rendered.as_bytes())
+                        .await
+                        .context(format!(
+                            "Failed to write index.html in {}",
+                            dst_dir.display()
+                        ))?;
+                    file.flush().await.context(format!(
+                        "Failed to flush index.html in {}",
+                        dst_dir.display()
+                    ))?;
+                    Ok(())
+                }
+                Err(e) => bail!("Failed to render {dir} {term}: {e}"),
+            }
+        }
+    })
+    .buffer_unordered(get_cpu())
+    .collect::<Vec<_>>()
+    .await
+    .into_iter()
+    .collect::<Result<()>>()
+}
+
 #[inline]
+/// Render the category and tag pages of one post.
 async fn render_file_class(metadata: &Metadata) -> Result<()> {
-    let pub_dir = Arc::new(get_public_path("."));
-    if let Some(cates) = &metadata.category {
-        stream::iter(
-            cates
-                .iter()
-                .filter(|&c| !pub_dir.join("category").join(c).exists()),
-        )
-        .map(|c| {
-            let pub_dir = pub_dir.clone();
-            async move {
-                let dst_dir = pub_dir.join("category").join(c);
-                fs::create_dir_all(&dst_dir).await?;
-                let mut context = Context::new();
-                context.insert("site", SITE.load().as_ref());
-                context.insert("name", c);
-                context.insert("title", c);
-                let posts = SITE
-                    .load()
-                    .category
-                    .get(c)
-                    .map(|class| class.posts.clone())
-                    .unwrap_or_default();
-                context.insert("posts", &posts);
-                match TERA.load().render("category.html", &context) {
-                    Ok(rendered) => {
-                        let mut file = File::create(dst_dir.join("index.html")).await?;
-                        file.write_all_buf(&mut rendered.as_bytes()).await?;
-                        file.flush().await?;
-                    }
-                    Err(e) => {
-                        return Err(anyhow!(
-                            "Failed to render {} category: {}",
-                            metadata.title,
-                            e
-                        ));
-                    }
-                };
-                Ok(())
-            }
-        })
-        .buffer_unordered(get_cpu())
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect::<Result<()>>()?;
-    }
-
-    if let Some(tags) = &metadata.tag {
-        stream::iter(
-            tags.iter()
-                .filter(|&c| !pub_dir.join("tag").join(c).exists()),
-        )
-        .map(|c| {
-            let pub_dir = pub_dir.clone();
-            async move {
-                let dst_dir = pub_dir.join("tag").join(c);
-                fs::create_dir_all(&dst_dir).await?;
-                let mut context = Context::new();
-                context.insert("site", SITE.load().as_ref());
-                context.insert("name", c);
-                context.insert("title", c);
-                let posts = SITE
-                    .load()
-                    .tag
-                    .get(c)
-                    .map(|class| class.posts.clone())
-                    .unwrap_or_default();
-                context.insert("posts", &posts);
-                match TERA.load().render("tag.html", &context) {
-                    Ok(rendered) => {
-                        let mut file = File::create(dst_dir.join("index.html")).await?;
-                        file.write_all_buf(&mut rendered.as_bytes()).await?;
-                        file.flush().await?;
-                    }
-                    Err(e) => {
-                        return Err(anyhow!("Failed to render {} tag: {}", metadata.title, e));
-                    }
-                };
-                Ok(())
-            }
-        })
-        .buffer_unordered(get_cpu())
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect::<Result<()>>()?;
-    }
-
+    let site = SITE.load();
+    render_terms(
+        metadata.category.as_deref(),
+        &site.category,
+        "category",
+        "category.html",
+    )
+    .await?;
+    render_terms(metadata.tag.as_deref(), &site.tag, "tag", "tag.html").await?;
     Ok(())
 }
 
@@ -180,10 +172,12 @@ enum RenderType {
 }
 
 #[inline]
-async fn render_file(src: &PathBuf, dst: &PathBuf, rt: RenderType) -> Result<()> {
-    let (metadata, md_body) = file::parse_file(src)?;
+/// Render one source file through its layout (frontmatter `layout`, else the
+/// render-type default) into `dst`. Posts additionally emit taxonomy pages.
+async fn render_file(src: &Path, dst: &Path, rt: RenderType) -> Result<()> {
+    let (metadata, md_body) = parse_file(src)?;
     let md_html_str = render(&md_body);
-    let mut context = Context::new();
+    let mut context = TeraContext::new();
     context.insert("content", &md_html_str);
     context.insert("markdown", &md_body);
     context.insert("title", &metadata.title);
@@ -197,12 +191,18 @@ async fn render_file(src: &PathBuf, dst: &PathBuf, rt: RenderType) -> Result<()>
     });
     match TERA.load().render(layout, &context) {
         Ok(rendered) => {
-            let mut file = File::create(dst).await?;
-            file.write_all_buf(&mut rendered.as_bytes()).await?;
-            file.flush().await?;
+            let mut file = File::create(dst)
+                .await
+                .context(format!("Failed to create: {}", dst.display()))?;
+            file.write_all_buf(&mut rendered.as_bytes())
+                .await
+                .context(format!("Failed to write: {}", dst.display()))?;
+            file.flush()
+                .await
+                .context(format!("Failed to flush: {}", dst.display()))?;
         }
         Err(e) => {
-            return Err(anyhow!("Failed to render {}: {}", metadata.title, e));
+            bail!("Failed to render {}: {}", metadata.title, e);
         }
     };
     if let RenderType::Post = rt {
@@ -211,6 +211,7 @@ async fn render_file(src: &PathBuf, dst: &PathBuf, rt: RenderType) -> Result<()>
     Ok(())
 }
 
+/// Render posts to `public/post/<name>/index.html`.
 pub(crate) async fn render_post(paths: Vec<&PathBuf>) -> Result<()> {
     let pub_dir = Arc::new(get_public_path("."));
     stream::iter(paths)
@@ -220,7 +221,9 @@ pub(crate) async fn render_post(paths: Vec<&PathBuf>) -> Result<()> {
                 if let Some(name) = path.file_stem() {
                     let name = name.to_string_lossy().to_string();
                     let dst_dir = pub_dir.join("post").join(&name);
-                    fs::create_dir_all(&dst_dir).await?;
+                    fs::create_dir_all(&dst_dir)
+                        .await
+                        .context(format!("Failed to create public/post/{name}/"))?;
                     let dst_file = dst_dir.join("index.html");
                     render_file(path, &dst_file, RenderType::Post).await?;
                 }
@@ -234,6 +237,7 @@ pub(crate) async fn render_post(paths: Vec<&PathBuf>) -> Result<()> {
         .collect::<Result<()>>()
 }
 
+/// Render pages to `public/<name>/index.html`.
 pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
     let pub_dir = Arc::new(get_public_path("."));
     stream::iter(paths)
@@ -243,7 +247,9 @@ pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
                 if let Some(name) = path.file_stem() {
                     let name = name.to_string_lossy().to_string();
                     let dst_dir = pub_dir.join(&name);
-                    fs::create_dir_all(&dst_dir).await?;
+                    fs::create_dir_all(&dst_dir)
+                        .await
+                        .context(format!("Failed to create public/page/{name}/"))?;
                     let dst_file = dst_dir.join("index.html");
                     render_file(path, &dst_file, RenderType::Page).await?;
                 }
@@ -257,49 +263,72 @@ pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
         .collect::<Result<()>>()
 }
 
+/// Render the tag and category index pages.
 async fn render_class() -> Result<()> {
-    let mut context = Context::new();
+    let mut context = TeraContext::new();
     context.insert("site", SITE.load().as_ref());
     context.insert("title", "Categories");
     let category_dir = get_public_path(".").join("category");
-    fs::create_dir_all(&category_dir).await?;
+    fs::create_dir_all(&category_dir)
+        .await
+        .context("Failed to create public/category/")?;
     match TERA.load().render("category-index.html", &context) {
         Ok(rendered) => {
-            let mut file = File::create(category_dir.join("index.html")).await?;
-            file.write_all_buf(&mut rendered.as_bytes()).await?;
-            file.flush().await?;
+            let mut file = File::create(category_dir.join("index.html"))
+                .await
+                .context("Failed to create public/category/index.html")?;
+            file.write_all_buf(&mut rendered.as_bytes())
+                .await
+                .context("Failed to write public/category/index.html")?;
+            file.flush()
+                .await
+                .context("Failed to flush public/category/index.html")?;
         }
         Err(e) => {
-            return Err(anyhow!("Failed to render category dir: {}", e));
+            bail!("Failed to render category dir: {}", e);
         }
     };
     context.insert("title", "Tags");
     let tag_dir = get_public_path(".").join("tag");
-    fs::create_dir_all(&tag_dir).await?;
+    fs::create_dir_all(&tag_dir)
+        .await
+        .context("Failed to create public/tag/")?;
     match TERA.load().render("tag-index.html", &context) {
         Ok(rendered) => {
-            let mut file = File::create(tag_dir.join("index.html")).await?;
-            file.write_all_buf(&mut rendered.as_bytes()).await?;
-            file.flush().await?;
+            let mut file = File::create(tag_dir.join("index.html"))
+                .await
+                .context("Failed to create public/tag/index.html")?;
+            file.write_all_buf(&mut rendered.as_bytes())
+                .await
+                .context("Failed to write public/tag/index.html")?;
+            file.flush()
+                .await
+                .context("Failed to flush public/tag/index.html")?;
         }
         Err(e) => {
-            return Err(anyhow!("Failed to render tag dir: {}", e));
+            bail!("Failed to render tag dir: {}", e);
         }
     };
     Ok(())
 }
 
 #[inline]
+/// Copy `source/robots.txt` into the build output when present.
 async fn copy_robots() -> Result<()> {
     let src = get_source_path(".").join("robots.txt");
     if src.exists() {
         let dst = get_public_path(".").join("robots.txt");
-        fs::copy(src, dst).await?;
+        fs::copy(&src, &dst).await.context(format!(
+            "Failed to copy from {} to {}",
+            src.display(),
+            dst.display()
+        ))?;
     }
     Ok(())
 }
 
 #[inline]
+/// Escape text for XML element and attribute content.
 fn escape_xml(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -309,6 +338,7 @@ fn escape_xml(text: &str) -> String {
 }
 
 #[inline]
+/// Truncate to `max_chars` characters, appending `…` when shortened.
 fn truncate_chars(s: &str, max_chars: usize) -> String {
     let mut out: String = s.chars().take(max_chars).collect();
     if s.chars().count() > max_chars {
@@ -317,6 +347,7 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
     out
 }
 
+/// Build the Atom feed for all posts.
 async fn gen_atom_str() -> String {
     let site = SITE.load();
     let mut xml = String::with_capacity(409600);
@@ -407,13 +438,17 @@ async fn gen_atom_str() -> String {
     xml
 }
 
+/// Write `public/atom.xml`.
 async fn gen_atom() -> Result<()> {
     let dst = get_public_path("atom.xml");
     let atom_str = gen_atom_str().await;
-    fs::write(dst, atom_str).await?;
+    fs::write(dst, atom_str)
+        .await
+        .context("Failed to write public/atom.xml")?;
     Ok(())
 }
 
+/// Build the sitemap for all posts.
 async fn gen_sitemap_str() -> String {
     let site = SITE.load();
     let mut xml = String::with_capacity(40960);
@@ -449,48 +484,45 @@ async fn gen_sitemap_str() -> String {
     xml
 }
 
+/// Write `public/sitemap.xml`.
 async fn gen_sitemap() -> Result<()> {
     let dst = get_public_path("sitemap.xml");
     let sitemap_str = gen_sitemap_str().await;
-    fs::write(dst, sitemap_str).await?;
+    fs::write(dst, sitemap_str)
+        .await
+        .context("Failed to write public/sitemap.xml")?;
     Ok(())
 }
 
-/// Render the whole site to the public dir: every post and page, the home
-/// page, and the active theme's static resources.
+/// Render the whole site into `public/`: posts, pages, taxonomies, the home
+/// page, theme assets, feed and sitemap.
 pub async fn render_all() -> Result<()> {
     let site = SITE.load();
-    // remove old
+    // start from a clean build directory
     remove_stale_outputs().await?;
-
-    // gen assets
     copy_theme_resources()?;
-
     copy_robots().await?;
 
-    // gen home: index
     render_home(&site).await?;
-
-    // render categorie/tag dir
     render_class().await?;
-
-    // render posts/pages
     render_post(site.post.iter().map(|d| &d.path).collect::<Vec<_>>()).await?;
     render_page(site.page.iter().map(|d| &d.path).collect::<Vec<_>>()).await?;
 
-    // gen atom.xml sitemap.xml
     gen_atom().await?;
     gen_sitemap().await?;
     Ok(())
 }
 
-/// Remove public files whose source was deleted, keeping the deployed site
-/// in sync with the sources.
+/// Wipe the previous build output so every run starts clean.
 async fn remove_stale_outputs() -> Result<()> {
     let target = crate::BASE_DIR.join("public");
     if target.exists() {
-        fs::remove_dir_all(&target).await?;
-        fs::create_dir_all(&target).await?;
+        fs::remove_dir_all(&target)
+            .await
+            .context("Failed to remove public/")?;
+        fs::create_dir_all(&target)
+            .await
+            .context("Failed to create public/")?;
     }
     Ok(())
 }
@@ -505,7 +537,7 @@ async fn render_home(site: &Site) -> Result<()> {
         info!("Skipping home page");
         return Ok(());
     }
-    let mut context = Context::new();
+    let mut context = TeraContext::new();
     // empty values keep `{% if content %}` / `{% if title %}` blocks happy
     context.insert("content", "");
     context.insert("title", "");
@@ -513,39 +545,40 @@ async fn render_home(site: &Site) -> Result<()> {
     context.insert("site", site);
     match tera.render("index.html", &context) {
         Ok(rendered) => {
-            fs::write(get_public_path("index.html"), rendered).await?;
-            info!("Rendered index");
+            fs::write(get_public_path("index.html"), rendered)
+                .await
+                .context("Failed to write public/home/index.html")?;
+            info!("Render public/home/index.html");
         }
-        Err(e) => error!("Failed to render home page: {}", e),
+        Err(e) => bail!("Failed to render public/home/index.html: {}", e),
     }
     Ok(())
 }
 
 /// Posts from `source/post`, newest first, exposed to the home page template.
-fn recent_posts(site: &Site) -> Vec<file::Metadata> {
+fn recent_posts(site: &Site) -> Vec<Metadata> {
     let post_dir = get_source_path("post");
-    let mut posts: Vec<file::Metadata> = site
+    let mut posts = site
         .post
         .iter()
         .filter(|m| m.path.starts_with(&post_dir))
         .cloned()
-        .collect();
-    posts.sort_by_key(|p| std::cmp::Reverse(date_rank(&p.date)));
+        .collect::<Vec<_>>();
+    posts.sort_by_key(|p| Reverse(date_rank(&p.date)));
     posts
 }
 
 /// Parse a frontmatter date (RFC3339 format);
 /// posts without a usable date sort last.
 fn date_rank(date: &str) -> DateTime<Tz> {
-    let site = SITE.load();
-    let tz = site.get_zone();
+    let tz = SITE.load().config.zone();
     DateTime::parse_from_rfc3339(date)
         .map(|d| d.with_timezone(&tz))
         .ok()
         .unwrap_or(DateTime::<Tz>::MIN_UTC.with_timezone(&tz))
 }
 
-/// Copy the active theme's `resource/` directory into `public/`.
+/// Copy the active theme's `assets/` directory into `public/assets/`.
 fn copy_theme_resources() -> Result<()> {
     let resource_dir = get_layout_path().join("assets");
     if !resource_dir.exists() {
@@ -554,16 +587,21 @@ fn copy_theme_resources() -> Result<()> {
     copy_dir_recursive(&resource_dir, &get_public_path("assets"))
 }
 
+/// Recursively copy the `src` tree into `dst`.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
+    std::fs::create_dir_all(dst).context(format!("Failed to create dir: {}", dst.display()))?;
+    for entry in std::fs::read_dir(src).context(format!("Failed to read dir: {}", src.display()))? {
+        let entry = entry.context("Failed to get theme entry")?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
         if from.is_dir() {
             copy_dir_recursive(&from, &to)?;
         } else {
-            std::fs::copy(&from, &to)?;
+            std::fs::copy(&from, &to).context(format!(
+                "Failed to copy from {} to {}",
+                from.display(),
+                to.display()
+            ))?;
         }
     }
     Ok(())

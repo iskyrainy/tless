@@ -10,6 +10,7 @@ use tera::{Context, Error, Kwargs, Map, State, Tera, TeraResult, Value};
 use tracing::info;
 
 use crate::server::{SITE, TERA, extract_root_path};
+use crate::util::slugify;
 
 /// Register all built-in template functions on `tera`.
 pub(crate) fn register_helpers(tera: &mut Tera) {
@@ -30,7 +31,7 @@ pub(crate) fn register_helpers(tera: &mut Tera) {
 /// Fallback amount for list helpers when no `amount` arg is given (effectively unlimited).
 const DEFAULT_AMOUNT: usize = 1 << 16;
 
-/// Parse a date string as RFC3339 format used by the CLI.
+/// Parse RFC3339 or the CLI `%Y-%m-%d %H:%M:%S` format, falling back to now.
 fn parse_datetime(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
@@ -281,6 +282,8 @@ fn class_of(map: &Map, key: &str, default: &str) -> String {
         .to_string()
 }
 
+/// Shared implementation of the `list_category` / `list_tag` / `list_post` /
+/// `list_page` template functions.
 fn list_call(kwargs: Kwargs, kind: ListKind) -> TeraResult<Value> {
     let orderby = kwargs
         .get::<String>("orderby")?
@@ -301,18 +304,18 @@ fn list_call(kwargs: Kwargs, kind: ListKind) -> TeraResult<Value> {
     let mut res = String::new();
     let site = &SITE.load();
 
-    let render_list = |res: &mut String, iter: Vec<(String, String, usize)>| {
+    let render_list = |res: &mut String, entries: &[(String, String, usize)]| {
         res.push_str(&format!(r#"<ul class="{ul_class}" itemprop="keywords">"#));
-        for (i, (name, href, count)) in iter.into_iter().enumerate() {
+        for (i, (name, href, count)) in entries.iter().enumerate() {
             if i >= amount {
                 break;
             }
             res.push_str(&format!(r#"<li class="{li_class}">"#));
             res.push_str(&format!(
                 r#"<a class="{a_class}" href="{href}">{}</a>"#,
-                escape_html_text(&name)
+                escape_html_text(name)
             ));
-            if show_count && count > 0 {
+            if show_count && *count > 0 {
                 res.push_str(&format!(r#"<span class="{count_class}">{count}</span>"#));
             }
             res.push_str("</li>");
@@ -320,64 +323,60 @@ fn list_call(kwargs: Kwargs, kind: ListKind) -> TeraResult<Value> {
         res.push_str("</ul>");
     };
 
-    let render_inline = |res: &mut String, iter: Vec<(String, String, usize)>| {
-        for (i, (name, href, count)) in iter.into_iter().enumerate() {
+    let render_inline = |res: &mut String, entries: &[(String, String, usize)]| {
+        for (i, (name, href, count)) in entries.iter().enumerate() {
             if i >= amount {
                 break;
             }
             // the count badge is rendered inside the link
             res.push_str(&format!(
                 r#"<a class="{a_class}" href="{href}">{}"#,
-                escape_html_text(&name)
+                escape_html_text(name)
             ));
-            if show_count && count > 0 {
+            if show_count && *count > 0 {
                 res.push_str(&format!(r#"<span class="{count_class}">{count}</span>"#));
             }
             res.push_str(&format!("</a>{separator}"));
         }
     };
 
-    match kind {
+    // entries are (display name, link, post count)
+    let entries: Vec<(String, String, usize)> = match kind {
         ListKind::Category | ListKind::Tag => {
-            let data = match kind {
-                ListKind::Category => site.category.iter(),
-                ListKind::Tag => site.tag.iter(),
-                _ => unreachable!(),
+            let classes = if matches!(kind, ListKind::Category) {
+                &site.category
+            } else {
+                &site.tag
             };
-            let mut tmp: Vec<_> = data
-                .map(|(k, v)| (k.clone(), v.path.clone(), v.posts.len()))
+            let mut tmp: Vec<_> = classes
+                .iter()
+                .map(|(name, class)| (name.clone(), class.path.clone(), class.posts.len()))
                 .collect();
             match orderby.as_str() {
-                "name" => {
+                "count" => {
+                    if order == -1 {
+                        tmp.sort_by_key(|entry| std::cmp::Reverse(entry.2));
+                    } else {
+                        tmp.sort_by_key(|entry| entry.2);
+                    }
+                }
+                _ => {
                     if order == -1 {
                         tmp.sort_by(|x, y| y.0.cmp(&x.0));
                     } else {
                         tmp.sort_by(|x, y| x.0.cmp(&y.0));
                     }
                 }
-                "count" => {
-                    if order == -1 {
-                        tmp.sort_by_key(|y| std::cmp::Reverse(y.2));
-                    } else {
-                        tmp.sort_by_key(|x| x.2);
-                    }
-                }
-                _ => {}
             }
-
-            if list {
-                render_list(&mut res, tmp);
-            } else {
-                render_inline(&mut res, tmp);
-            }
+            tmp
         }
         ListKind::Post | ListKind::Page => {
-            let mut tmp = match kind {
-                ListKind::Post => site.post.clone(),
-                ListKind::Page => site.page.clone(),
-                _ => unreachable!(),
+            let mut posts = if matches!(kind, ListKind::Post) {
+                site.post.clone()
+            } else {
+                site.page.clone()
             };
-            tmp.sort_by(|x, y| {
+            posts.sort_by(|x, y| {
                 let x_date = parse_datetime(&x.date);
                 let y_date = parse_datetime(&y.date);
                 if order == -1 {
@@ -386,20 +385,24 @@ fn list_call(kwargs: Kwargs, kind: ListKind) -> TeraResult<Value> {
                     x_date.cmp(&y_date)
                 }
             });
-            let mapped: Vec<_> = tmp
-                .into_iter()
+            posts
+                .iter()
                 .map(|p| {
-                    let title = p.title;
-                    (title.clone(), title, 0)
+                    let path = if matches!(kind, ListKind::Post) {
+                        "/post"
+                    } else {
+                        ""
+                    };
+                    (p.title.clone(), format!("{path}/{}", slugify(&p.title)), 0)
                 })
-                .collect();
-
-            if list {
-                render_list(&mut res, mapped);
-            } else {
-                render_inline(&mut res, mapped);
-            }
+                .collect()
         }
+    };
+
+    if list {
+        render_list(&mut res, &entries);
+    } else {
+        render_inline(&mut res, &entries);
     }
     Ok(Value::safe_string(&res))
 }
@@ -597,6 +600,7 @@ fn toc_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
     Ok(Value::safe_string(&html))
 }
 
+/// Group the integer part of a number with `separator` every three digits.
 fn format_number_with_separator(value: &str, separator: &str) -> String {
     let value = value.trim();
     if value.is_empty() {
@@ -637,27 +641,10 @@ fn level_to_usize(level: HeadingLevel) -> usize {
     }
 }
 
+/// Template `slugify()`; see [crate::util::slugify] for the algorithm.
 fn to_slug(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
     let input = kwargs.must_get::<String>("str")?;
     Ok(Value::normal_string(&slugify(input.as_str())))
-}
-
-/// Slug used for heading anchors, shared by the `toc` helper and the
-/// markdown renderer so that both sides agree.
-pub(crate) fn slugify(input: &str) -> String {
-    let mut slug = String::new();
-    let mut prev_dash = false;
-    for ch in input.chars() {
-        let lower = ch.to_ascii_lowercase();
-        if lower.is_ascii_alphanumeric() {
-            slug.push(lower);
-            prev_dash = false;
-        } else if !prev_dash && !slug.is_empty() {
-            slug.push('-');
-            prev_dash = true;
-        }
-    }
-    slug.trim_matches('-').to_string()
 }
 
 fn escape_html_attr(input: &str) -> String {
@@ -680,6 +667,7 @@ const MAX_OPERATIONS: u64 = 1_000_000;
 const MAX_EXPR_DEPTHS: (usize, usize) = (32, 64);
 const MAX_CALL_LEVELS: usize = 64;
 
+/// Convert a template value into a Rhai dynamic for helper scripts.
 fn value_to_dynamic(v: &Value) -> Dynamic {
     if v.is_none() {
         return Dynamic::UNIT;
@@ -715,6 +703,7 @@ fn value_to_dynamic(v: &Value) -> Dynamic {
     Dynamic::UNIT
 }
 
+/// Convert a Rhai result back into a template value.
 fn dynamic_to_value(res: Dynamic) -> Value {
     if res.is::<String>() {
         Value::normal_string(&res.cast::<String>())
@@ -740,6 +729,7 @@ fn dynamic_to_value(res: Dynamic) -> Value {
     }
 }
 
+/// Call the script's `fn main(args)`, passing all template kwargs as one map.
 fn rhai_call(kwargs: Kwargs, engine: &Engine, ast: &AST) -> TeraResult<Value> {
     let mut scope = rhai::Scope::new();
     // all template call args are passed to `fn main(args)` as one map
@@ -1070,15 +1060,6 @@ mod tests {
         assert!(is_absolute_url("http://x.com"));
         assert!(!is_absolute_url("/a"));
         assert!(!is_absolute_url("a"));
-    }
-
-    #[test]
-    fn slugify_normalizes_into_ascii_slugs() {
-        assert_eq!(slugify("Hello, World!"), "hello-world");
-        assert_eq!(slugify("a---b"), "a-b");
-        assert_eq!(slugify("-x-"), "x");
-        assert_eq!(slugify("café au lait"), "caf-au-lait");
-        assert_eq!(slugify(""), "");
     }
 
     #[test]

@@ -1,21 +1,27 @@
+//! Tless, a fast and easy blog site builder. See `tles --help` for commands.
+#![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
+
 use std::{env, path::PathBuf, sync::LazyLock};
 
 use tracing_subscriber::EnvFilter;
 
 pub mod cmd;
+pub(crate) mod config;
 pub mod error;
 pub(crate) mod file;
 pub(crate) mod server;
+pub(crate) mod util;
 
 /// Working directory the application runs from.
 pub(crate) static BASE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     env::current_dir().unwrap_or_else(|_| error::fatal("Cannot get current directory"))
 });
 
+/// Initialize tracing, using `RUST_LOG` when set (default level: `info`).
 pub fn init_logging() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_target(true)
         .with_line_number(true)
