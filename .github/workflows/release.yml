@@ -18,21 +18,13 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Check secret presence
-        env:
-          TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          if [ -z "$TOKEN" ]; then
-            echo "::error::CARGO_REGISTRY_TOKEN is empty"
-            exit 1
-          fi
-          echo "Token present, length: ${#TOKEN}"
-
       - name: Create release
         id: create
         uses: seaofvoices/rust-release-action@v1
         with:
           publish_crate: true
+          cargo_token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          github_token: ${{ secrets.RELEASE_TOKEN }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
