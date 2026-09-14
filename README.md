@@ -4,6 +4,7 @@
 
 ![Rust](https://img.shields.io/badge/rust-2024_edition-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/iskyrainy/tless/badge)](https://scorecard.dev/viewer/?uri=github.com/iskyrainy/tless)
 
 `tless` turns a folder of Markdown files into a complete static blog. It ships a development
 server with hot reload, a minimal theme with dark mode, and a scaffolded GitHub Actions
