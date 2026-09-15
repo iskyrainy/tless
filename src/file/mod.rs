@@ -15,7 +15,7 @@ use crate::{BASE_DIR, config, util::slugify};
 mod blog;
 mod page;
 
-pub use blog::Blog;
+pub use blog::Post;
 pub use page::Page;
 
 /// Metadata parsed from a source file's frontmatter.

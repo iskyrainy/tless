@@ -30,6 +30,7 @@ mod render;
 mod run;
 mod site;
 mod template;
+mod translate;
 
 pub use render::render_all;
 pub use run::run;
@@ -41,6 +42,7 @@ pub use site::init;
 /// * `page` - List of all page metadata.
 /// * `category` - Map of all categories.
 /// * `tag` - Map of all tags.
+/// * `config` - Config loaded from `tless.toml`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct Site {
     pub post: Vec<Metadata>,

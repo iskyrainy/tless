@@ -2,11 +2,11 @@
 
 > A fast, easy blog site builder — write Markdown, preview live, deploy to GitHub Pages.
 
-![Rust](https://img.shields.io/badge/rust-2024_edition-orange)
-![License](https://img.shields.io/badge/license-MIT-blue)
+[![Rust](https://img.shields.io/badge/rust-2024_edition-orange)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/)
+[![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/iskyrainy/tless/badge)](https://scorecard.dev/viewer/?uri=github.com/iskyrainy/tless)
 
-`tless` turns a folder of Markdown files into a complete static blog. It ships a development
+`tles` turns a folder of Markdown files into a complete static blog. It ships a development
 server with hot reload, a minimal theme with dark mode, and a scaffolded GitHub Actions
 workflow, so the whole flow is `write → preview → push`.
 
@@ -150,7 +150,7 @@ to `main`. One-time setup in your repository:
 > Set **Settings → Pages → Source** to **GitHub Actions**, and update `url` in `tless.toml` to
 > your final site URL so feeds, sitemap and absolute links are correct.
 
-The workflow installs `tless` from this repository — point it at your fork if you maintain one.
+The workflow installs `tles` from this repository — point it at your fork if you maintain one.
 
 ## Development
 

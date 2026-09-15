@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{BASE_DIR, error::AppError, file, server};
 
@@ -25,8 +25,8 @@ enum Commands {
     /// Run the Tless server and specify the port
     Server(Server),
 
-    /// Control blog drafts and posts: add/remove/publish
-    Blog(Blog),
+    /// Control post drafts and posts: add/remove/publish
+    Post(Post),
 
     /// Control pages: add/remove
     Page(Page),
@@ -57,19 +57,19 @@ struct Server {
 }
 
 #[derive(Args, Debug)]
-struct Blog {
+struct Post {
     #[command(subcommand)]
-    cli: BlogArgs,
+    cli: PostArgs,
 }
 
 #[derive(Subcommand, Debug, Clone)]
-enum BlogArgs {
-    /// Add a draft blog.
+enum PostArgs {
+    /// Add a draft post.
     /// Fails if the file already exists.
     ///
     /// usage:
     /// ```bash
-    /// # add a draft blog named 'FirstBlog'
+    /// # add a draft post named 'FirstBlog'
     /// tles blog add FirstBlog
     /// ```
     Add { name: String },
@@ -132,7 +132,7 @@ enum PageArgs {
 }
 
 #[derive(Args, Debug)]
-#[group(required = true, multiple = false)]
+#[group(required = true, multiple = true)]
 struct Site {
     /// Initialize site structure.
     ///
@@ -143,7 +143,7 @@ struct Site {
     #[clap(short, long)]
     init: bool,
 
-    /// Generate static pages.
+    /// Generate to public/.
     ///
     /// usage:
     /// ```bash
@@ -151,6 +151,15 @@ struct Site {
     /// ```
     #[clap(short, long)]
     generate: bool,
+
+    /// Translate by LLM.
+    ///
+    /// usage:
+    /// ```bash
+    /// tles site -t
+    /// ```
+    #[clap(short, long)]
+    translate: bool,
 }
 
 /// Parse command line arguments and run the selected subcommand.
@@ -171,7 +180,7 @@ pub fn parse_cmd() -> Result<(), AppError> {
     };
     match input.cmd {
         Commands::Server(server) => handle_server(server).map_err(AppError::from),
-        Commands::Blog(blog) => handle_blog(blog).map_err(AppError::from),
+        Commands::Post(blog) => handle_post(blog).map_err(AppError::from),
         Commands::Page(page) => handle_page(page).map_err(AppError::from),
         Commands::Site(site) => handle_site(site).map_err(AppError::from),
     }
@@ -189,11 +198,11 @@ fn handle_server(server: Server) -> Result<()> {
     Ok(())
 }
 
-fn handle_blog(blog: Blog) -> Result<()> {
-    match &blog.cli {
-        BlogArgs::Add { name } => file::Blog::add(name),
-        BlogArgs::Remove { class, name } => file::Blog::remove(name, class),
-        BlogArgs::Publish { name } => file::Blog::publish(name),
+fn handle_post(post: Post) -> Result<()> {
+    match &post.cli {
+        PostArgs::Add { name } => file::Post::add(name),
+        PostArgs::Remove { class, name } => file::Post::remove(name, class),
+        PostArgs::Publish { name } => file::Post::publish(name),
     }
 }
 
@@ -205,12 +214,20 @@ fn handle_page(page: Page) -> Result<()> {
 }
 
 fn handle_site(site: Site) -> Result<()> {
+    if !(site.init || site.generate || site.translate) {
+        bail!("No valid site operation specified");
+    }
+
     if site.init {
         info!("Initializing site structure...");
-        server::init().context("Failed to initialize site structure")?;
-        info!("Finish site structure...");
-        Ok(())
-    } else if site.generate {
+        if let Err(e) = server::init() {
+            warn!("Failed to init site: {}", e);
+        } else {
+            info!("Initialize site structure ok");
+        }
+    }
+
+    if site.generate {
         info!("Generating publish/ ...");
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -218,8 +235,11 @@ fn handle_site(site: Site) -> Result<()> {
             .context("Failed to create render runtime")?;
         runtime.block_on(server::render_all())?;
         info!("Generated public/");
-        Ok(())
-    } else {
-        bail!("No valid site operation specified");
     }
+
+    if site.translate {
+        todo!()
+    }
+
+    Ok(())
 }

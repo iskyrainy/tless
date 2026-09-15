@@ -7,9 +7,9 @@ use tracing::info;
 
 use crate::file::{ValidEntity, current_timestamp, get_path, parse_file};
 
-pub struct Blog;
+pub struct Post;
 
-impl ValidEntity for Blog {
+impl ValidEntity for Post {
     fn validate_and_get_path(name: &str) -> Result<PathBuf> {
         let slug = Self::validate_name(name)?;
         let file_path = get_path(&slug, "draft");
@@ -20,7 +20,7 @@ impl ValidEntity for Blog {
     }
 }
 
-impl Blog {
+impl Post {
     /// Add a new draft blog file.
     pub fn add(name: &str) -> Result<()> {
         let file_path = Self::validate_and_get_path(name)?;
