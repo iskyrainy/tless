@@ -76,43 +76,25 @@ macro_rules! make_translate {
         impl TranslationBackend for $provider {
             async fn translate(&self, origin_text: &str, target_lang: &str) -> Result<String> {
                 let client = self.client();
-                let payload = format!(
-                    r#"{{
-                        "model": "{}",
-                        "messages": [
-                            {{
-                                "role": "system",
-                                "content": [
-                                    {{
-                                        "type": "text",
-                                        "text": "{}"
-                                    }}
-                                ]
-                            }},
-                            {{
-                                "role": "user",
-                                "content": [
-                                    {{
-                                        "type": "text",
-                                        "text": "<source>{}</source><target_language>{}</target_language>"
-                                    }}
-                                ]
-                            }}
-                        ],
-                        "thinking": {{
-                            "type": "disabled"
-                        }},
-                        "max_tokens": 102400,
-                        "response_format": {{
-                            "type": "text"
-                        }},
-                        "stream": false,
-                    }}"#,
-                    self.model(),
-                    Self::SYSTEM_PROMPT,
-                    origin_text,
-                    target_lang,
-                );
+                let payload = serde_json::json!({
+                    "model": self.model(),
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": [{"type": "text", "text": Self::SYSTEM_PROMPT}]
+                        },
+                        {
+                            "role": "user",
+                            "content": [{
+                                "type": "text",
+                                "text": format!("<source>{}</source><target_language>{}</target_language>", origin_text, target_lang)
+                            }]
+                        },
+                    ],
+                    "thinking": {"type": "disabled"},
+                    "max_tokens": 102400,
+                    "stream": false,
+                });
 
                 match client
                     .post(self.base_url())
@@ -125,7 +107,9 @@ macro_rules! make_translate {
                 {
                     Ok(resp) => {
                         if !resp.status().is_success() {
-                            bail!("Failed to request llm api: {}", resp.status());
+                            let status_code = resp.status();
+                            let body = resp.text().await.unwrap_or_default();
+                            bail!("Failed to request llm api {status_code}: {body}");
                         }
                         match resp.text().await {
                             Ok(data) => match serde_json::from_str::<Value>(&data) {
