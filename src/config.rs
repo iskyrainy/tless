@@ -7,12 +7,13 @@ use anyhow::{Result, bail};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
-use crate::BASE_DIR;
+use crate::{BASE_DIR, server::I18nConfig};
 
 /// Configuration structure for the application.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct Config {
     pub site: SiteConfig,
+    pub i18n: Option<I18nConfig>,
 }
 
 /// Part of `[site]` configuration details.

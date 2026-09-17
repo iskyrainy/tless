@@ -7,7 +7,7 @@ description = "A fast blog powered by Tless."
 rights = "All rights reserved Tless"
 author = "Tless"
 url = "http://127.0.0.1:8917"
-zone = "UTC"
+zone = "Asia/Shanghai"
 theme = "base"
 favicon = ""
 menu = [
@@ -16,3 +16,8 @@ menu = [
     { name = "Categories", link = "/category" },
 ]
 
+[i18n]
+provider = "deepseek"
+api_key = ""
+model = "deepseek-flash"
+target_lang = ["en-US", "jp", "ko-KR"]

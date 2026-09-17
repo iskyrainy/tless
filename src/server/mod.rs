@@ -32,6 +32,7 @@ mod run;
 mod site;
 mod template;
 
+pub use i18n::I18nConfig;
 pub use render::render_all;
 pub use run::run;
 pub use site::init;

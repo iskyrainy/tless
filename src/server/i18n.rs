@@ -1,8 +1,16 @@
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Error, Result, bail};
+use futures::{StreamExt, stream};
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::{
+    fs::{self, File},
+    io::AsyncWriteExt,
+};
+
+use crate::server::{SITE, get_source_path};
 
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 
@@ -11,7 +19,7 @@ struct ProviderInfo {
     model: String,
 }
 
-trait Provider {
+trait Provider: Send + Sync {
     fn name(&self) -> &str;
     fn base_url(&self) -> &str;
     fn api_key(&self) -> &str;
@@ -56,7 +64,7 @@ You are a professional technical translator for a static site blog. Your task is
 "#;
 
 #[async_trait::async_trait]
-trait TranslationBackend {
+trait TranslationBackend: Send + Sync {
     async fn translate(&self, origin_text: &str, target_lang: &str) -> Result<String>;
 }
 
@@ -205,11 +213,64 @@ pub(crate) async fn translate(
     provider: &str,
     api_key: &str,
     model: &str,
-    origin_text: &str,
-    target_lang: &str,
-) -> Result<String> {
-    Providers::create(provider)?
-        .into_backend(api_key, model)
-        .translate(origin_text, target_lang)
+    target_lang: Vec<&str>,
+) -> Result<()> {
+    let p = Providers::create(provider)?.into_backend(api_key, model);
+    for tl in target_lang {
+        translate_tl(&*p, tl).await?;
+    }
+    Ok(())
+}
+
+async fn translate_tl(provider: &dyn TranslationBackend, target_lang: &str) -> Result<()> {
+    let provider = Arc::new(provider);
+    let site = SITE.load();
+
+    // FIXME: this will translate all post, but we only need translate those which are updated. For
+    // less llm api cost.
+    stream::iter(&site.post)
+        .map(|d| {
+            let p = provider.clone();
+            async move {
+                let md_str = fs::read_to_string(&d.path).await.context(format!(
+                    "Failed to read origin markdown: {}",
+                    &d.path.display()
+                ))?;
+                let Some(name) = d.path.file_name().and_then(|s| s.to_str()) else {
+                    return Ok(());
+                };
+                // FIXME: target_lang as path is not reasonable. But the problem is how to design
+                // target_lang and transfer it from config to llm request and render path.
+                let dst = get_source_path("post").join(target_lang).join(name);
+                let mut file = File::create(&dst).await.context(format!(
+                    "Failed to create translated markdown: {}",
+                    &dst.display()
+                ))?;
+                let target_str = p.translate(&md_str, target_lang).await?;
+                file.write_all_buf(&mut target_str.as_bytes())
+                    .await
+                    .context(format!(
+                        "Failed to write translated markdown: {}",
+                        &dst.display()
+                    ))?;
+                file.flush().await.context(format!(
+                    "Failed to flush translated markdown: {}",
+                    &dst.display()
+                ))?;
+                Ok(())
+            }
+        })
+        .buffer_unordered(4)
+        .collect::<Vec<Result<(), Error>>>()
         .await
+        .into_iter()
+        .collect::<_>()
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct I18nConfig {
+    pub provider: String,
+    pub api_key: String,
+    pub model: String,
+    pub target_lang: Vec<String>,
 }
