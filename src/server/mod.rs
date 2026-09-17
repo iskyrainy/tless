@@ -26,11 +26,11 @@ use crate::{
 };
 
 mod helper;
+mod i18n;
 mod render;
 mod run;
 mod site;
 mod template;
-mod translate;
 
 pub use render::render_all;
 pub use run::run;
