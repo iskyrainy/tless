@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::{BASE_DIR, config, util::slugify};
+use crate::{BASE_DIR, server::zone, util::slugify};
 
 mod blog;
 mod page;
@@ -42,7 +42,7 @@ pub(crate) fn get_path(name: &str, class: &str) -> PathBuf {
 /// Current timestamp formatted in the configured `[site] zone`, falling back to UTC.
 #[inline]
 pub(crate) fn current_timestamp() -> String {
-    Utc::now().with_timezone(&config::zone()).to_rfc3339()
+    Utc::now().with_timezone(&zone()).to_rfc3339()
 }
 
 /// Parse a source file into [Metadata] and its markdown body (frontmatter

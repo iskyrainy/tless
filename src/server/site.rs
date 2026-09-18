@@ -24,6 +24,7 @@ pub fn init() -> Result<()> {
         "source/draft",
         "source/post",
         "source/page",
+        "source/i18n",
     ];
     for dir in tracked_dirs {
         let dir = current_dir.join(dir);

@@ -6,7 +6,6 @@ use std::{env, path::PathBuf, sync::LazyLock};
 use tracing_subscriber::EnvFilter;
 
 pub mod cmd;
-pub(crate) mod config;
 pub mod error;
 pub(crate) mod file;
 pub(crate) mod server;

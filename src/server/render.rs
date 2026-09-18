@@ -27,7 +27,7 @@ use crate::{
         ClassMap, SITE, Site, TERA, extract_root_path, get_layout_path, get_public_path,
         get_source_path,
     },
-    util::slugify,
+    util::{get_cpu, slugify},
 };
 
 /// Markdown default render options.
@@ -79,14 +79,6 @@ fn add_heading_ids(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
     out
 }
 
-#[inline]
-/// Worker count for the concurrent render pipelines.
-fn get_cpu() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        * 2
-}
 
 /// Render one page per term (`category.html` / `tag.html`) for the terms of
 /// `metadata`, skipping terms that already have a page in this build.

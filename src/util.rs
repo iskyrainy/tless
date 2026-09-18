@@ -19,6 +19,15 @@ pub(crate) fn slugify(input: &str) -> String {
     slug.trim_matches('-').to_string()
 }
 
+/// Worker count for the concurrent render pipelines.
+#[inline]
+pub fn get_cpu() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        * 2
+}
+
 #[cfg(test)]
 mod tests {
     use super::slugify;

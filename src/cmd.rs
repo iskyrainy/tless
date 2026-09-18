@@ -238,7 +238,13 @@ fn handle_site(site: Site) -> Result<()> {
     }
 
     if site.translate {
-        todo!()
+        info!("Generating i18n/ ...");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("Failed to create render runtime")?;
+        runtime.block_on(server::translate())?;
+        info!("Generated i18n/");
     }
 
     Ok(())

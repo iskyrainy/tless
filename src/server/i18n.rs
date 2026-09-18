@@ -1,4 +1,8 @@
-use std::sync::{Arc, LazyLock};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, LazyLock},
+};
 
 use anyhow::{Context, Error, Result, bail};
 use futures::{StreamExt, stream};
@@ -8,9 +12,14 @@ use serde_json::Value;
 use tokio::{
     fs::{self, File},
     io::AsyncWriteExt,
+    sync::RwLock,
 };
 
-use crate::server::{SITE, get_source_path};
+use crate::{
+    error,
+    server::{SITE, get_source_path},
+    util::get_cpu,
+};
 
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 
@@ -20,19 +29,14 @@ struct ProviderInfo {
 }
 
 trait Provider: Send + Sync {
-    fn name(&self) -> &str;
     fn base_url(&self) -> &str;
     fn api_key(&self) -> &str;
     fn model(&self) -> &str;
 }
 
 macro_rules! make_provider {
-    ($provider: ident, $name: literal, $url: literal) => {
+    ($provider: ident, $url: literal) => {
         impl Provider for $provider {
-            fn name(&self) -> &str {
-                $name
-            }
-
             fn base_url(&self) -> &str {
                 $url
             }
@@ -177,29 +181,18 @@ struct QwenProvider(ProviderInfo);
 struct KimiProvider(ProviderInfo);
 struct GlmProvider(ProviderInfo);
 
-make_provider!(
-    OpenaiProvider,
-    "openai",
-    "https://api.openai.com/v1/responses"
-);
+make_provider!(OpenaiProvider, "https://api.openai.com/v1/responses");
 make_provider!(
     DeepseekProvider,
-    "deepseek",
     "https://api.deepseek.com/chat/completions"
 );
 make_provider!(
     QwenProvider,
-    "qwen",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 );
-make_provider!(
-    KimiProvider,
-    "kimi",
-    "https://api.moonshot.cn/v1/chat/completions"
-);
+make_provider!(KimiProvider, "https://api.moonshot.cn/v1/chat/completions");
 make_provider!(
     GlmProvider,
-    "glm",
     "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 );
 
@@ -209,16 +202,17 @@ make_translate!(QwenProvider);
 make_translate!(KimiProvider);
 make_translate!(GlmProvider);
 
-pub(crate) async fn translate(
-    provider: &str,
-    api_key: &str,
-    model: &str,
-    target_lang: Vec<&str>,
-) -> Result<()> {
-    let p = Providers::create(provider)?.into_backend(api_key, model);
-    for tl in target_lang {
+pub async fn translate() -> Result<()> {
+    let site = SITE.load();
+    let p =
+        Providers::create(&site.i18n.provider)?.into_backend(&site.i18n.api_key, &site.i18n.model);
+
+    // TODO: clean old post i18n
+
+    for tl in &site.i18n.target_lang {
         translate_tl(&*p, tl).await?;
     }
+    dump_hash().await?;
     Ok(())
 }
 
@@ -226,26 +220,33 @@ async fn translate_tl(provider: &dyn TranslationBackend, target_lang: &str) -> R
     let provider = Arc::new(provider);
     let site = SITE.load();
 
-    // FIXME: this will translate all post, but we only need translate those which are updated. For
-    // less llm api cost.
     stream::iter(&site.post)
         .map(|d| {
             let p = provider.clone();
             async move {
+                let Some(name) = d.path.file_name().and_then(|s| s.to_str()) else {
+                    return Ok(());
+                };
+
                 let md_str = fs::read_to_string(&d.path).await.context(format!(
                     "Failed to read origin markdown: {}",
                     &d.path.display()
                 ))?;
-                let Some(name) = d.path.file_name().and_then(|s| s.to_str()) else {
+                let new = compute_md5(&md_str);
+                let p_str = d.path.to_string_lossy().to_string();
+                if let Some(old) = POST_HASH.read().await.get(&p_str)
+                    && old.eq(&new)
+                {
                     return Ok(());
-                };
-                // FIXME: target_lang as path is not reasonable. But the problem is how to design
-                // target_lang and transfer it from config to llm request and render path.
-                let dst = get_source_path("post").join(target_lang).join(name);
+                }
+                POST_HASH.write().await.insert(p_str, new);
+
+                let dst = get_source_path("i18n").join(target_lang).join(name);
                 let mut file = File::create(&dst).await.context(format!(
                     "Failed to create translated markdown: {}",
                     &dst.display()
                 ))?;
+
                 let target_str = p.translate(&md_str, target_lang).await?;
                 file.write_all_buf(&mut target_str.as_bytes())
                     .await
@@ -257,14 +258,72 @@ async fn translate_tl(provider: &dyn TranslationBackend, target_lang: &str) -> R
                     "Failed to flush translated markdown: {}",
                     &dst.display()
                 ))?;
+
                 Ok(())
             }
         })
-        .buffer_unordered(4)
+        .buffer_unordered(get_cpu())
         .collect::<Vec<Result<(), Error>>>()
         .await
         .into_iter()
         .collect::<_>()
+}
+
+async fn dump_hash() -> Result<()> {
+    let path = get_source_path("post").join(".post_hash.json");
+    let map = POST_HASH.read().await;
+    fs::write(
+        &path,
+        serde_json::to_string(&*map).context("Failed to serialize map into string")?,
+    )
+    .await
+    .context("Failed to dump posts md5 value into source/post/.post_hash.json")?;
+    Ok(())
+}
+
+static POST_HASH: LazyLock<RwLock<HashMap<String, String>>> = LazyLock::new(|| {
+    let path = get_source_path("post").join(".post_hash.json");
+    if path.exists() {
+        let hash_str = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| error::fatal("Failed to read source/post/.post_hash.json"));
+        RwLock::new(
+            serde_json::from_str::<HashMap<String, String>>(&hash_str).unwrap_or_else(|_| {
+                error::fatal("Failed to deserialize source/post/.post_hash.json")
+            }),
+        )
+    } else {
+        let mut map = HashMap::new();
+        let site = SITE.load();
+        for post in &site.post {
+            map.insert(
+                post.path.to_string_lossy().to_string(),
+                compute_file_md5(&post.path).unwrap_or_else(|e| error::fatal(e.to_string())),
+            );
+        }
+        std::fs::write(
+            &path,
+            serde_json::to_string(&map)
+                .unwrap_or_else(|_| error::fatal("Failed to serialize map into string")),
+        )
+        .unwrap_or_else(|_| {
+            error::fatal("Failed to dump posts md5 value into source/post/.post_hash.json")
+        });
+
+        RwLock::new(map)
+    }
+});
+
+#[inline]
+pub fn compute_file_md5(p: &PathBuf) -> Result<String> {
+    let post_str =
+        std::fs::read_to_string(p).context(format!("Failed to open file: {}", p.display()))?;
+    Ok(compute_md5(&post_str))
+}
+
+#[inline]
+pub fn compute_md5(text: &String) -> String {
+    let digest = md5::compute(text);
+    format!("{:x}", digest)
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -273,4 +332,192 @@ pub struct I18nConfig {
     pub api_key: String,
     pub model: String,
     pub target_lang: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+enum Language {
+    #[serde(rename = "af")]
+    Afrikaans,
+    #[serde(rename = "sq")]
+    Albanian,
+    #[serde(rename = "am")]
+    Amharic,
+    #[serde(rename = "ar")]
+    Arabic,
+    #[serde(rename = "hy")]
+    Armenian,
+    #[serde(rename = "as")]
+    Assamese,
+    #[serde(rename = "az")]
+    Azerbaijani,
+    #[serde(rename = "eu")]
+    Basque,
+    #[serde(rename = "bn")]
+    Bengali,
+    #[serde(rename = "bg")]
+    Bulgarian,
+    #[serde(rename = "my")]
+    Burmese,
+    #[serde(rename = "ca")]
+    Catalan,
+    #[serde(rename = "chr")]
+    Cherokee,
+    #[serde(rename = "zh-HK")]
+    ChineseHongKong,
+    #[serde(rename = "zh-CN")]
+    ChineseSimplified,
+    #[serde(rename = "zh-TW")]
+    ChineseTraditional,
+    #[serde(rename = "hr")]
+    Croatian,
+    #[serde(rename = "cs")]
+    Czech,
+    #[serde(rename = "da")]
+    Danish,
+    #[serde(rename = "nl")]
+    Dutch,
+    #[serde(rename = "en-GB")]
+    EnglishUk,
+    #[serde(rename = "en")]
+    EnglishUs,
+    #[serde(rename = "et")]
+    Estonian,
+    #[serde(rename = "fil")]
+    Filipino,
+    #[serde(rename = "fi")]
+    Finnish,
+    #[serde(rename = "fr")]
+    French,
+    #[serde(rename = "fr-CA")]
+    FrenchCanada,
+    #[serde(rename = "gl")]
+    Galician,
+    #[serde(rename = "ka")]
+    Georgian,
+    #[serde(rename = "de")]
+    German,
+    #[serde(rename = "el")]
+    Greek,
+    #[serde(rename = "gu")]
+    Gujarati,
+    #[serde(rename = "iw")]
+    Hebrew,
+    #[serde(rename = "hi")]
+    Hindi,
+    #[serde(rename = "hu")]
+    Hungarian,
+    #[serde(rename = "is")]
+    Icelandic,
+    #[serde(rename = "id")]
+    Indonesian,
+    #[serde(rename = "ga")]
+    Irish,
+    #[serde(rename = "it")]
+    Italian,
+    #[serde(rename = "ja")]
+    Japanese,
+    #[serde(rename = "kn")]
+    Kannada,
+    #[serde(rename = "kk")]
+    Kazakh,
+    #[serde(rename = "km")]
+    Khmer,
+    #[serde(rename = "ko")]
+    Korean,
+    #[serde(rename = "lo")]
+    Lao,
+    #[serde(rename = "lv")]
+    Latvian,
+    #[serde(rename = "lt")]
+    Lithuanian,
+    #[serde(rename = "mk")]
+    Macedonian,
+    #[serde(rename = "ms")]
+    Malay,
+    #[serde(rename = "ml")]
+    Malayalam,
+    #[serde(rename = "mr")]
+    Marathi,
+    #[serde(rename = "mn")]
+    Mongolian,
+    #[serde(rename = "ne")]
+    Nepali,
+    #[serde(rename = "no")]
+    Norwegian,
+    #[serde(rename = "or")]
+    Oriya,
+    #[serde(rename = "fa")]
+    Persian,
+    #[serde(rename = "pl")]
+    Polish,
+    #[serde(rename = "pt-BR")]
+    PortugueseBrazil,
+    #[serde(rename = "pt-PT")]
+    PortuguesePortugal,
+    #[serde(rename = "pa")]
+    Punjabi,
+    #[serde(rename = "ro")]
+    Romanian,
+    #[serde(rename = "ru")]
+    Russian,
+    #[serde(rename = "sr")]
+    Serbian,
+    #[serde(rename = "si")]
+    Sinhala,
+    #[serde(rename = "sk")]
+    Slovak,
+    #[serde(rename = "sl")]
+    Slovenian,
+    #[serde(rename = "es")]
+    Spanish,
+    #[serde(rename = "es-419")]
+    SpanishLatinAmerica,
+    #[serde(rename = "sw")]
+    Swahili,
+    #[serde(rename = "sv")]
+    Swedish,
+    #[serde(rename = "ta")]
+    Tamil,
+    #[serde(rename = "te")]
+    Telugu,
+    #[serde(rename = "th")]
+    Thai,
+    #[serde(rename = "tr")]
+    Turkish,
+    #[serde(rename = "uk")]
+    Ukrainian,
+    #[serde(rename = "ur")]
+    Urdu,
+    #[serde(rename = "uz")]
+    Uzbek,
+    #[serde(rename = "vi")]
+    Vietnamese,
+    #[serde(rename = "cy")]
+    Welsh,
+    #[serde(rename = "zu")]
+    Zulu,
+}
+
+impl Language {
+    pub fn from_code(code: &str) -> Option<Self> {
+        serde_json::from_value(Value::String(code.to_string())).ok()
+    }
+}
+
+impl TryFrom<&str> for Language {
+    type Error = anyhow::Error;
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        Ok(serde_json::from_value::<Language>(Value::String(
+            value.to_string(),
+        ))?)
+    }
+}
+
+impl From<Language> for String {
+    fn from(value: Language) -> Self {
+        serde_json::to_value(value)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default()
+    }
 }

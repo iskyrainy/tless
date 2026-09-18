@@ -20,4 +20,4 @@ menu = [
 provider = "deepseek"
 api_key = ""
 model = "deepseek-flash"
-target_lang = ["en-US", "jp", "ko-KR"]
+target_lang = ["zh-CN", "en", "jp", "ko"]
