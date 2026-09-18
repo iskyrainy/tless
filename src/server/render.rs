@@ -79,7 +79,6 @@ fn add_heading_ids(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
     out
 }
 
-
 /// Render one page per term (`category.html` / `tag.html`) for the terms of
 /// `metadata`, skipping terms that already have a page in this build.
 async fn render_terms(

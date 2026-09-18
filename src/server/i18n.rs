@@ -14,6 +14,7 @@ use tokio::{
     io::AsyncWriteExt,
     sync::RwLock,
 };
+use tracing::warn;
 
 use crate::{
     error,
@@ -210,15 +211,21 @@ pub async fn translate() -> Result<()> {
     // TODO: clean old post i18n
 
     for tl in &site.i18n.target_lang {
-        translate_tl(&*p, tl).await?;
+        if let Some(tl) = Language::from_code(tl) {
+            translate_tl(&*p, tl).await?;
+        } else {
+            warn!("Not a standard target language: {tl}");
+        }
     }
     dump_hash().await?;
     Ok(())
 }
 
-async fn translate_tl(provider: &dyn TranslationBackend, target_lang: &str) -> Result<()> {
+async fn translate_tl(provider: &dyn TranslationBackend, target_lang: Language) -> Result<()> {
     let provider = Arc::new(provider);
     let site = SITE.load();
+    let target_lang: String = target_lang.into();
+    let target_lang = target_lang.as_str();
 
     stream::iter(&site.post)
         .map(|d| {
