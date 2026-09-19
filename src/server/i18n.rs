@@ -333,14 +333,6 @@ pub fn compute_md5(text: &String) -> String {
     format!("{:x}", digest)
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct I18nConfig {
-    pub provider: String,
-    pub api_key: String,
-    pub model: String,
-    pub target_lang: Vec<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 enum Language {
     #[serde(rename = "af")]

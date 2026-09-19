@@ -554,6 +554,7 @@ fn open_graph_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
 fn toc_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
     let content = kwargs.must_get::<String>("content")?;
     let max_level = kwargs.get::<usize>("max_level")?.unwrap_or(6);
+    let min_level = kwargs.get::<usize>("min_level")?.unwrap_or(1);
 
     let mut items = Vec::new();
     let mut current_level = None;
@@ -572,7 +573,7 @@ fn toc_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
             }
             Event::End(TagEnd::Heading(..)) => {
                 if let Some(level) = current_level.take()
-                    && level <= max_level
+                    && (min_level..=max_level).contains(&level)
                     && !current_text.trim().is_empty()
                 {
                     let text = current_text.trim().to_string();
@@ -1012,6 +1013,14 @@ mod tests {
         assert_eq!(
             render(r#"{{ toc(content='# One\n\n## Two\n\n### Three') }}"#),
             r##"<nav class="toc" aria-label="Table of contents"><ul><li class="toc-level-1"><a href="#one">One</a></li><li class="toc-level-2"><a href="#two">Two</a></li><li class="toc-level-3"><a href="#three">Three</a></li></ul></nav>"##
+        );
+    }
+
+    #[test]
+    fn toc_helper_respects_min_level() {
+        assert_eq!(
+            render(r#"{{ toc(content='# One\n\n## Two', min_level=2) }}"#),
+            r##"<nav class="toc" aria-label="Table of contents"><ul><li class="toc-level-2"><a href="#two">Two</a></li></ul></nav>"##
         );
     }
 

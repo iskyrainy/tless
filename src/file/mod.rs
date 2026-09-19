@@ -10,7 +10,13 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::{BASE_DIR, server::zone, util::slugify};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
+use crate::{
+    BASE_DIR,
+    server::zone,
+    util::{slugify, truncate},
+};
 
 mod blog;
 mod page;
@@ -27,6 +33,8 @@ pub struct Metadata {
     pub tag: Option<Vec<String>>,
     pub category: Option<Vec<String>>,
     pub path: PathBuf,
+    /// First paragraph of the body as plain text; filled by [parse_file].
+    pub excerpt: String,
 }
 
 /// Path to a source file (`source/<class>/<name>.md`).
@@ -91,7 +99,45 @@ pub fn parse_file(path: &Path) -> Result<(Metadata, String)> {
             .collect();
         metadata.category = Some(category_list);
     }
+    metadata.excerpt = excerpt(md_body);
     Ok((metadata, md_body.to_string()))
+}
+
+/// First paragraph of a markdown body as plain text, for post listings.
+/// Headings, code blocks and images are skipped; links keep their text.
+fn excerpt(body: &str) -> String {
+    for block in body.split("\n\n") {
+        let block = block.trim();
+        if block.is_empty() {
+            continue;
+        }
+        let mut text = String::new();
+        let mut skip = false;
+        let mut in_image = 0usize;
+        for event in Parser::new(block) {
+            match event {
+                Event::Start(Tag::Heading { .. }) | Event::Start(Tag::CodeBlock(_)) => {
+                    skip = true;
+                    break;
+                }
+                Event::Start(Tag::Image { .. }) => in_image += 1,
+                Event::End(TagEnd::Image) => in_image = in_image.saturating_sub(1),
+                // image alt text is not part of the excerpt
+                Event::Text(t) | Event::Code(t) if in_image == 0 => {
+                    if !text.is_empty() {
+                        text.push(' ');
+                    }
+                    text.push_str(t.trim());
+                }
+                _ => {}
+            }
+        }
+        let text = text.trim();
+        if !skip && !text.is_empty() {
+            return truncate(text, 160);
+        }
+    }
+    String::new()
 }
 
 /// A source entity (blog, page, ...) addressed by a user-supplied name.
@@ -112,5 +158,36 @@ pub(crate) trait ValidEntity {
             bail!("Invalid characters in name");
         }
         Ok(slug)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::excerpt;
+
+    #[test]
+    fn excerpt_skips_headings_and_code() {
+        let body =
+            "# Title\n\n## Section\n\n```rust\nfn main() {}\n```\n\nThe real first paragraph.";
+        assert_eq!(excerpt(body), "The real first paragraph.");
+    }
+
+    #[test]
+    fn excerpt_keeps_link_text_and_drops_images() {
+        let body = "![cover](/img.png)\n\nRead the [announcement](/post/x) for details.";
+        assert_eq!(excerpt(body), "Read the announcement for details.");
+    }
+
+    #[test]
+    fn excerpt_truncates_long_paragraphs() {
+        let body = "word ".repeat(60);
+        let excerpt = excerpt(&body);
+        assert!(excerpt.ends_with('…'));
+        assert_eq!(excerpt.chars().count(), 161);
+    }
+
+    #[test]
+    fn excerpt_is_empty_for_heading_only_bodies() {
+        assert_eq!(excerpt("## Only headings\n\n### Nothing else"), "");
     }
 }

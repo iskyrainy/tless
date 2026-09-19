@@ -10,7 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDateTime};
 use chrono_tz::Tz;
 use futures::{StreamExt, stream};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html};
@@ -27,7 +27,7 @@ use crate::{
         ClassMap, SITE, Site, TERA, extract_root_path, get_layout_path, get_public_path,
         get_source_path,
     },
-    util::{get_cpu, slugify},
+    util::{get_cpu, slugify, truncate},
 };
 
 /// Markdown default render options.
@@ -329,15 +329,6 @@ fn escape_xml(text: &str) -> String {
 }
 
 #[inline]
-/// Truncate to `max_chars` characters, appending `…` when shortened.
-fn truncate_chars(s: &str, max_chars: usize) -> String {
-    let mut out: String = s.chars().take(max_chars).collect();
-    if s.chars().count() > max_chars {
-        out.push('…');
-    }
-    out
-}
-
 /// Build the Atom feed for all posts.
 async fn gen_atom_str() -> String {
     let site = SITE.load();
@@ -407,7 +398,7 @@ async fn gen_atom_str() -> String {
             r#"    <link href="{root_esc}/post/{name_esc}" rel="self"/>"#
         );
 
-        let summary = truncate_chars(&content, 200);
+        let summary = truncate(&content, 200);
         let _ = writeln!(
             xml,
             "    <summary type=\"html\">{}</summary>",
@@ -559,13 +550,18 @@ fn recent_posts(site: &Site) -> Vec<Metadata> {
     posts
 }
 
-/// Parse a frontmatter date (RFC3339 format);
+/// Rank a frontmatter date (RFC3339 or the CLI `%Y-%m-%d %H:%M:%S` format);
 /// posts without a usable date sort last.
 fn date_rank(date: &str) -> DateTime<Tz> {
     let tz = SITE.load().config.zone();
     DateTime::parse_from_rfc3339(date)
         .map(|d| d.with_timezone(&tz))
         .ok()
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(date, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|d| d.and_utc().with_timezone(&tz))
+        })
         .unwrap_or(DateTime::<Tz>::MIN_UTC.with_timezone(&tz))
 }
 

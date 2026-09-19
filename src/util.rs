@@ -19,6 +19,15 @@ pub(crate) fn slugify(input: &str) -> String {
     slug.trim_matches('-').to_string()
 }
 
+/// Truncate to `max` characters, appending `…` when the text was shortened.
+pub(crate) fn truncate(text: &str, max: usize) -> String {
+    let mut out: String = text.chars().take(max).collect();
+    if text.chars().count() > max {
+        out.push('…');
+    }
+    out
+}
+
 /// Worker count for the concurrent render pipelines.
 #[inline]
 pub fn get_cpu() -> usize {

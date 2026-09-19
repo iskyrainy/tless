@@ -31,7 +31,6 @@ mod run;
 mod site;
 mod template;
 
-pub use i18n::I18nConfig;
 pub use i18n::translate;
 pub use render::render_all;
 pub use run::run;
@@ -51,7 +50,7 @@ pub(crate) struct Site {
     pub category: HashMap<String, ClassMap>,
     pub tag: HashMap<String, ClassMap>,
     pub config: SiteConfig,
-    pub i18n: I18nConfig,
+    i18n: I18nConfig,
 }
 
 impl Site {
@@ -105,6 +104,14 @@ impl SiteConfig {
     pub(crate) fn zone(&self) -> Tz {
         self.zone.trim().parse().unwrap_or(Tz::UTC)
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct I18nConfig {
+    pub provider: String,
+    pub api_key: String,
+    pub model: String,
+    pub target_lang: Vec<String>,
 }
 
 /// Menu item structure for site navigation.
