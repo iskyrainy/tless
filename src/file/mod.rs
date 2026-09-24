@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
+use chrono::{Local, Utc};
 use serde::{Deserialize, Serialize};
 
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
@@ -73,14 +73,12 @@ pub fn parse_file(path: &Path) -> Result<(Metadata, String)> {
     if let Some(title) = frontmatter.get("title").and_then(|v| v.as_str()) {
         metadata.title = title.to_string();
     } else {
-        metadata.title = path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
+        metadata.title = String::new();
     }
     if let Some(date) = frontmatter.get("date").and_then(|v| v.as_str()) {
         metadata.date = date.to_string();
+    } else {
+        metadata.date = Local::now().to_rfc3339().to_string();
     }
     if let Some(layout) = frontmatter.get("layout").and_then(|v| v.as_str()) {
         metadata.layout = Some(layout.to_string());
