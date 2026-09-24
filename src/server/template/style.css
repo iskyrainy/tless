@@ -32,6 +32,18 @@
     --rail: 240px;
     --rail-gap: 30px;
     --container: calc(var(--page-width) + 2 * var(--rail) + 2 * var(--rail-gap));
+    --inset: 48px;
+
+    /* Every region is framed by dashed hairlines. They are drawn as background
+       images so a line can span an element's full edge while its content stays
+       inset by padding. */
+    --dash-color: var(--border);
+    --dash-x: repeating-linear-gradient(to right, var(--dash-color) 0 4px, transparent 4px 8px);
+    --dash-y: repeating-linear-gradient(to bottom, var(--dash-color) 0 4px, transparent 4px 8px);
+
+    /* Distance from the viewport edge to the framed content column, clamped so
+       it collapses to the gutter once the viewport is narrower. */
+    --frame-inset: max(calc(50% - var(--container) / 2), var(--gutter));
 }
 
 /* Smooth anchor jumps; disabled for users who ask for less motion. */
@@ -109,21 +121,34 @@ a:hover {
     top: 0;
     z-index: 50;
     background: var(--background);
-    border-bottom: 1px solid var(--border);
     transition: background-color 0.2s ease;
+}
+
+/* The top edge of the frame; it stops at the content column so it meets the
+   vertical rules running down `.main`. */
+.site-header::after {
+    content: "";
+    position: absolute;
+    right: var(--frame-inset);
+    bottom: 0;
+    left: var(--frame-inset);
+    height: 1px;
+    background-image: var(--dash-x);
 }
 
 /* Constrained to the content column, so the brand starts exactly where the
    article body and the home feed start. */
+/* Site title on the left, menu and actions grouped on the right. The bar spans
+   the whole content frame, so the title lines up with the region content below
+   it and the actions sit flush with the frame's inner edge. */
 .header-inner {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    display: flex;
     align-items: center;
-    gap: 16px;
-    max-width: calc(var(--page-width) + 2 * var(--gutter));
+    gap: 32px;
+    max-width: calc(var(--container) + 2 * var(--gutter));
     height: var(--header-height);
     margin: 0 auto;
-    padding: 0 var(--gutter);
+    padding: 0 calc(var(--gutter) + var(--inset));
 }
 
 .brand {
@@ -131,7 +156,6 @@ a:hover {
     align-items: center;
     gap: 12px;
     color: var(--display);
-    justify-self: start;
 }
 
 .brand:hover {
@@ -151,14 +175,14 @@ a:hover {
     white-space: nowrap;
 }
 
+/* Pushed to the right, next to the RSS and theme buttons. */
 .nav {
     display: flex;
     align-items: center;
     gap: 26px;
-    justify-self: center;
+    margin-left: auto;
     font-size: 14px;
     font-weight: 500;
-    margin-left: 230%;
 }
 
 .nav a {
@@ -175,7 +199,6 @@ a:hover {
     display: flex;
     align-items: center;
     gap: 12px;
-    justify-self: end;
 }
 
 .header-rss {
@@ -227,21 +250,57 @@ html[data-theme="dark"] .icon-sun {
 
 /* Main column */
 .main {
+    position: relative;
     flex: 1 0 auto;
     width: 100%;
     max-width: calc(var(--container) + 2 * var(--gutter));
     margin: 0 auto;
-    padding: 0 var(--gutter);
+    padding: 0 var(--gutter) 64px;
 }
 
+/* Side edges of the frame, running the full height of the content region. */
+.main::before,
+.main::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background-image: var(--dash-y);
+    pointer-events: none;
+}
+
+.main::before {
+    left: var(--gutter);
+}
+
+.main::after {
+    right: var(--gutter);
+}
+
+/* Prose pages stay on the narrow column. */
 .page {
     max-width: var(--page-width);
     margin: 0 auto;
 }
 
+/* Listing pages use the whole framed column, so the feed can run two up. */
+.archive {
+    max-width: var(--container);
+    margin: 0 auto;
+}
+
+.archive-head {
+    padding: var(--inset) var(--inset) 40px;
+    background-image: var(--dash-x);
+    background-position: 0 100%;
+    background-size: 100% 1px;
+    background-repeat: no-repeat;
+}
+
 /* Page title */
 .page-title {
-    margin: 56px 0 8px;
+    margin: 0 0 8px;
     font-family: var(--font-sans);
     font-size: 2.25rem;
     font-weight: 600;
@@ -250,25 +309,54 @@ html[data-theme="dark"] .icon-sun {
     color: var(--display);
 }
 
-/* Post list */
-.post-list {
-    margin-top: 40px;
-    border-top: 1px solid var(--border);
+.page-description {
+    max-width: 60ch;
+    margin: 0;
+    font-size: 1.125rem;
+    line-height: 1.6;
+    color: var(--text-soft);
+}
+
+/* Post feed: the newest post spans the row, the rest run two up, divided by
+   the same dashed hairlines that frame the regions. */
+.post-feed {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .post-entry {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 40px;
-    align-items: center;
-    padding: 36px 0;
-    border-bottom: 1px solid var(--border);
-}
-
-.entry-body {
     display: flex;
     flex-direction: column;
     gap: 20px;
+    padding: 40px var(--inset);
+    background-image: var(--dash-x);
+    background-position: 0 0;
+    background-size: 100% 1px;
+    background-repeat: no-repeat;
+}
+
+/* Right-hand card of each pair gets a rule down its inner edge as well. The
+   hero on the home feed occupies the first row, which flips the parity. */
+.post-feed:not(.post-feed-hero) .post-entry:nth-child(odd),
+.post-feed-hero .post-entry:nth-child(even) {
+    background-image: var(--dash-x), var(--dash-y);
+    background-position: 0 0, 100% 0;
+    background-size: 100% 1px, 1px 100%;
+}
+
+.post-entry-featured {
+    grid-column: 1 / -1;
+    gap: 24px;
+    padding-top: 48px;
+    padding-bottom: 48px;
+}
+
+.post-entry-featured .entry-title {
+    font-size: clamp(1.5rem, 3vw, 2rem);
+}
+
+.post-entry-featured .entry-excerpt {
+    max-width: 70ch;
 }
 
 .date {
@@ -290,9 +378,9 @@ html[data-theme="dark"] .icon-sun {
 .entry-title {
     margin: 0;
     font-family: var(--font-sans);
-    font-size: clamp(1.5rem, 3vw, 2rem);
+    font-size: 1.5rem;
     font-weight: 500;
-    line-height: 1.2;
+    line-height: 1.375;
     letter-spacing: -0.015em;
     color: var(--display);
     transition: color 0.2s ease;
@@ -304,9 +392,14 @@ html[data-theme="dark"] .icon-sun {
 
 .entry-excerpt {
     margin: 0;
+    font-size: 1rem;
+    line-height: 1.75;
+    color: var(--text-soft);
+}
+
+.post-entry-featured .entry-excerpt {
     font-size: 1.125rem;
     line-height: 1.625;
-    color: var(--text-soft);
 }
 
 .bylines {
@@ -369,7 +462,11 @@ html[data-theme="dark"] .icon-sun {
     grid-template-columns: var(--rail) minmax(0, var(--page-width)) var(--rail);
     column-gap: var(--rail-gap);
     justify-content: center;
-    padding: 56px 0 32px;
+    padding: 56px 0 40px;
+    background-image: var(--dash-x);
+    background-position: 0 100%;
+    background-size: 100% 1px;
+    background-repeat: no-repeat;
 }
 
 .post-header > * {
@@ -403,8 +500,11 @@ html[data-theme="dark"] .icon-sun {
     padding-bottom: 24px;
 }
 
+/* Rails hold their content away from the frame rules. */
 .post-rail {
     grid-column: 1;
+    padding-left: var(--inset);
+    padding-right: 24px;
 }
 
 .post-body {
@@ -413,6 +513,8 @@ html[data-theme="dark"] .icon-sun {
 
 .toc-rail {
     grid-column: 3;
+    padding-left: 24px;
+    padding-right: var(--inset);
 }
 
 .post-rail,
@@ -772,51 +874,72 @@ html[data-theme="dark"] .icon-sun {
     font-weight: 600;
 }
 
-/* Footer */
-.site-footer {
-    margin-top: 64px;
-    border-top: 1px solid var(--border);
-}
-
-.footer-subscribe {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 16px;
-    max-width: calc(var(--container) + 2 * var(--gutter));
+/* Previous / next post, the band that closes an article */
+.post-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: var(--container);
     margin: 0 auto;
-    padding: 22px var(--gutter);
+    background-image: var(--dash-x);
+    background-position: 0 0;
+    background-size: 100% 1px;
+    background-repeat: no-repeat;
 }
 
-.footer-subscribe-text h2 {
-    margin: 0 0 2px;
-    font-size: 16px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
+.post-nav-link {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 32px var(--inset);
     color: var(--display);
 }
 
-.footer-subscribe-text p {
-    margin: 0;
-    font-size: 13px;
-    color: var(--text-soft);
+.post-nav-next {
+    align-items: flex-end;
+    text-align: right;
+    background-image: var(--dash-y);
+    background-position: 0 0;
+    background-size: 1px 100%;
+    background-repeat: no-repeat;
 }
 
-.footer-subscribe-btn {
-    display: inline-flex;
-    align-items: center;
-    padding: 8px 18px;
-    border-radius: var(--radius);
-    background: var(--accent);
-    color: #fff;
-    font-size: 14px;
-    font-weight: 600;
-}
-
-.footer-subscribe-btn:hover {
+.post-nav-link:hover {
     text-decoration: none;
-    filter: brightness(1.08);
+}
+
+.post-nav-label {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--tertiary);
+}
+
+.post-nav-link:hover .post-nav-label {
+    color: var(--accent);
+}
+
+.post-nav-title {
+    font-size: 1.125rem;
+    font-weight: 500;
+    line-height: 1.35;
+}
+
+/* Footer */
+.site-footer {
+    position: relative;
+}
+
+/* Bottom edge of the frame, matching the header. */
+.site-footer::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: var(--frame-inset);
+    left: var(--frame-inset);
+    height: 1px;
+    background-image: var(--dash-x);
 }
 
 .footer-bar {
@@ -827,8 +950,7 @@ html[data-theme="dark"] .icon-sun {
     gap: 12px;
     max-width: calc(var(--container) + 2 * var(--gutter));
     margin: 0 auto;
-    padding: 20px var(--gutter) 28px;
-    border-top: 1px solid var(--border);
+    padding: 20px calc(var(--gutter) + var(--inset)) 28px;
     color: var(--tertiary);
     font-size: 13px;
 }
@@ -847,7 +969,7 @@ html[data-theme="dark"] .icon-sun {
     color: var(--display);
 }
 
-/* Back to top */
+/* Back to top; its edge is the reading-progress ring */
 .back-to-top {
     position: fixed;
     right: 24px;
@@ -859,7 +981,7 @@ html[data-theme="dark"] .icon-sun {
     width: 44px;
     height: 44px;
     padding: 0;
-    border: 1px solid var(--border);
+    border: none;
     border-radius: 50%;
     background: var(--background);
     color: var(--display);
@@ -878,14 +1000,48 @@ html[data-theme="dark"] .icon-sun {
 }
 
 .back-to-top:hover {
-    border-color: var(--accent);
     color: var(--accent);
+}
+
+.back-to-top-ring {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    /* start the arc at twelve o'clock */
+    transform: rotate(-90deg);
+}
+
+.back-to-top-ring circle {
+    fill: none;
+    stroke-width: 1.5;
+}
+
+.back-to-top-track {
+    stroke: var(--border);
+}
+
+.back-to-top-progress {
+    stroke: var(--accent);
+    stroke-linecap: round;
+    /* 2 * pi * r, drawn by offsetting the dash as the page is scrolled */
+    stroke-dasharray: 131.95;
+    stroke-dashoffset: 131.95;
+    transition: stroke-dashoffset 0.1s linear;
+}
+
+.back-to-top-icon {
+    position: relative;
 }
 
 .empty,
 .back-link {
-    padding: 24px 0;
+    padding: 24px var(--inset);
     color: var(--tertiary);
+}
+
+.empty {
+    padding-top: 40px;
 }
 
 /* Not enough room for the rails beside the content column: drop the table of
@@ -907,10 +1063,20 @@ html[data-theme="dark"] .icon-sun {
         display: none;
     }
 
+    /* Single column: the article now reaches the frame rules, so it takes the
+       same inset the feed cards get. */
+    .post-header,
+    .post-body,
+    .page {
+        padding-left: var(--inset);
+        padding-right: var(--inset);
+    }
+
     .post-rail {
         position: static;
         order: 2;
         margin-top: 8px;
+        padding: 0 var(--inset);
     }
 
     .share {
@@ -930,17 +1096,23 @@ html[data-theme="dark"] .icon-sun {
 }
 
 @media (max-width: 860px) {
+    /* The reference tightens its inset from 48px to 20px on small screens. */
+    :root {
+        --inset: 20px;
+    }
+
+    /* Title and actions on the first row, the menu drops to its own row. */
     .header-inner {
-        grid-template-columns: auto 1fr;
+        flex-wrap: wrap;
         height: auto;
-        padding: 12px var(--gutter);
+        padding: 12px calc(var(--gutter) + var(--inset));
         row-gap: 8px;
     }
 
     .nav {
-        grid-column: 1 / -1;
-        grid-row: 2;
-        justify-self: start;
+        order: 3;
+        flex-basis: 100%;
+        margin-left: 0;
         flex-wrap: wrap;
         gap: 16px;
     }
@@ -952,6 +1124,27 @@ html[data-theme="dark"] .icon-sun {
 
     .post-header {
         display: block;
+    }
+
+    /* One card per row: the side-by-side rule no longer applies. */
+    .post-feed,
+    .post-nav {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .post-feed:not(.post-feed-hero) .post-entry:nth-child(odd),
+    .post-feed-hero .post-entry:nth-child(even) {
+        background-image: var(--dash-x);
+        background-position: 0 0;
+        background-size: 100% 1px;
+    }
+
+    .post-nav-next {
+        align-items: flex-start;
+        text-align: left;
+        background-image: var(--dash-x);
+        background-position: 0 0;
+        background-size: 100% 1px;
     }
 
     /* No gutter to hang the anchors in at this width. */
@@ -973,20 +1166,15 @@ html[data-theme="dark"] .icon-sun {
     .site-header,
     .entry-title,
     .toc-nav .toc a,
-    .back-to-top {
+    .back-to-top,
+    .back-to-top-progress {
         transition: none;
     }
 }
 
 /* Taxonomy index lists */
-.archive-count {
-    margin: 0 0 8px;
-    font-size: 15px;
-    color: var(--text-soft);
-}
-
 .taxonomy-list {
-    margin-top: 36px;
+    padding: 32px var(--inset) 8px;
 }
 
 .taxonomy-list ul {

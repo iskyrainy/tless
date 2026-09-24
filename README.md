@@ -62,7 +62,7 @@ source/
   robots.txt
 theme/base/
   layout/                      # base.html, index.html, post.html, page.html, tag*.html, category*.html
-  assets/                      # style.css, highlight.css
+  assets/                      # style.css, highlight.css, highlight.js
 ```
 
 Names are slugified (`First Post` → `first-post.md`), and every source file is rendered to a

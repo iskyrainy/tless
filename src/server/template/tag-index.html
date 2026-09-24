@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% block main %}
-<div class="page">
-    <h1 class="page-title">Tags</h1>
-    <p class="archive-count">{{ site.tag | length }} tags across all posts</p>
+<div class="archive">
+    <header class="archive-head">
+        <h1 class="page-title">Tags</h1>
+        <p class="page-description">{{ site.tag | length }} tags across all posts</p>
+    </header>
     <div class="taxonomy-list">
         {{ list_tag(orderby="name", order=1, list=true, show_count=true) | safe }}
     </div>

@@ -1,24 +1,26 @@
+{% extends "base.html" %}
 {% block main %}
-<div class="page">
-    <h1 class="page-title">{{ site.config.subtitle }}</h1>
-    <div class="post-list">
+<div class="archive">
+    <header class="archive-head">
+        <h1 class="page-title">{{ site.config.title }}</h1>
+        {% if site.config.subtitle %}<p class="page-description">{{ site.config.subtitle }}</p>{% endif %}
+    </header>
+    <div class="post-feed post-feed-hero">
         {% for p in recent_posts %}
-        <article class="post-entry">
-            <div class="entry-body">
-                <time class="date" datetime="{{ p.date }}">{{ date(ts=p.date, fmt="%B %-d, %Y") }}</time>
-                <a class="entry-link" href="/post/{{ slugify(str=p.path, is_path=true) }}">
-                    <h2 class="entry-title">{{ p.title }}</h2>
-                </a>
-                {% if p.excerpt %}<p class="entry-excerpt">{{ p.excerpt }}</p>{% endif %}
-                <div class="bylines">
-                    <div class="avatar-stack">
-                        <span class="avatar">{{ site.config.author | truncate(length=1, end="") }}</span>
-                    </div>
-                    <span class="byline-name"><a href="/">{{ site.config.author }}</a></span>
-                    {% if p.category %}
-                    <span class="entry-cats">{% for c in p.category %}<a href="/category/{{ c }}">{{ c }}</a>{% endfor %}</span>
-                    {% endif %}
+        <article class="post-entry{% if loop.first %} post-entry-featured{% endif %}">
+            <time class="date" datetime="{{ p.date }}">{{ date(ts=p.date, fmt="%B %-d, %Y") }}</time>
+            <a class="entry-link" href="/post/{{ slugify(str=p.path, is_path=true) }}">
+                <h2 class="entry-title">{{ p.title }}</h2>
+            </a>
+            {% if p.excerpt %}<p class="entry-excerpt">{{ p.excerpt }}</p>{% endif %}
+            <div class="bylines">
+                <div class="avatar-stack">
+                    <span class="avatar">{{ site.config.author | truncate(length=1, end="") }}</span>
                 </div>
+                <span class="byline-name"><a href="/">{{ site.config.author }}</a></span>
+                {% if p.category %}
+                <span class="entry-cats">{% for c in p.category %}<a href="/category/{{ c }}">{{ c }}</a>{% endfor %}</span>
+                {% endif %}
             </div>
         </article>
         {% else %}

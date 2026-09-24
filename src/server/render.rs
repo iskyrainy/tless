@@ -165,7 +165,13 @@ enum RenderType {
 #[inline]
 /// Render one source file through its layout (frontmatter `layout`, else the
 /// render-type default) into `dst`. Posts additionally emit taxonomy pages.
-async fn render_file(src: &Path, dst: &Path, rt: RenderType) -> Result<()> {
+async fn render_file(
+    src: &Path,
+    dst: &Path,
+    rt: RenderType,
+    prev_post: Option<&Metadata>,
+    next_post: Option<&Metadata>,
+) -> Result<()> {
     let (metadata, md_body) = parse_file(src)?;
     let md_html_str = render(&md_body);
     let mut context = TeraContext::new();
@@ -175,6 +181,8 @@ async fn render_file(src: &Path, dst: &Path, rt: RenderType) -> Result<()> {
     context.insert("date", &metadata.date);
     context.insert("tag", &metadata.tag);
     context.insert("category", &metadata.category);
+    context.insert("prev_post", &prev_post);
+    context.insert("next_post", &next_post);
     context.insert("site", SITE.load().as_ref());
     let layout = metadata.layout.as_deref().unwrap_or(match rt {
         RenderType::Post => "post.html",
@@ -202,12 +210,29 @@ async fn render_file(src: &Path, dst: &Path, rt: RenderType) -> Result<()> {
     Ok(())
 }
 
+/// The posts either side of `path` in the newest-first feed: the one published
+/// earlier is the previous post, the one published later is the next.
+#[inline]
+fn neighbours<'a>(
+    ordered: &'a [Metadata],
+    path: &Path,
+) -> (Option<&'a Metadata>, Option<&'a Metadata>) {
+    let Some(index) = ordered.iter().position(|post| post.path == path) else {
+        return (None, None);
+    };
+    let prev = ordered.get(index + 1);
+    let next = index.checked_sub(1).and_then(|i| ordered.get(i));
+    (prev, next)
+}
+
 /// Render posts to `public/post/<name>/index.html`.
 pub(crate) async fn render_post(paths: Vec<&PathBuf>) -> Result<()> {
     let pub_dir = Arc::new(get_public_path("."));
+    let ordered = Arc::new(recent_posts(SITE.load().as_ref()));
     stream::iter(paths)
         .map(|path| {
             let pub_dir = pub_dir.clone();
+            let ordered = ordered.clone();
             async move {
                 if let Some(name) = path.file_stem() {
                     let name = name.to_string_lossy().to_string();
@@ -216,7 +241,8 @@ pub(crate) async fn render_post(paths: Vec<&PathBuf>) -> Result<()> {
                         .await
                         .context(format!("Failed to create public/post/{name}/"))?;
                     let dst_file = dst_dir.join("index.html");
-                    render_file(path, &dst_file, RenderType::Post).await?;
+                    let (prev, next) = neighbours(&ordered, path);
+                    render_file(path, &dst_file, RenderType::Post, prev, next).await?;
                 }
                 Ok(())
             }
@@ -242,7 +268,7 @@ pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
                         .await
                         .context(format!("Failed to create public/page/{name}/"))?;
                     let dst_file = dst_dir.join("index.html");
-                    render_file(path, &dst_file, RenderType::Page).await?;
+                    render_file(path, &dst_file, RenderType::Page, None, None).await?;
                 }
                 Ok(())
             }
@@ -597,6 +623,45 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Posts named `a`..`d`, newest first, as `recent_posts` would return them.
+    fn ordered_posts() -> Vec<Metadata> {
+        ["d", "c", "b", "a"]
+            .iter()
+            .map(|name| Metadata {
+                path: PathBuf::from(format!("source/post/{name}.md")),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn neighbours_link_older_as_previous_and_newer_as_next() {
+        let posts = ordered_posts();
+        let (prev, next) = neighbours(&posts, Path::new("source/post/b.md"));
+        assert_eq!(prev.unwrap().path, Path::new("source/post/a.md"));
+        assert_eq!(next.unwrap().path, Path::new("source/post/c.md"));
+    }
+
+    #[test]
+    fn neighbours_are_absent_at_both_ends() {
+        let posts = ordered_posts();
+        let (prev, next) = neighbours(&posts, Path::new("source/post/d.md"));
+        assert_eq!(prev.unwrap().path, Path::new("source/post/c.md"));
+        assert!(next.is_none());
+
+        let (prev, next) = neighbours(&posts, Path::new("source/post/a.md"));
+        assert!(prev.is_none());
+        assert_eq!(next.unwrap().path, Path::new("source/post/b.md"));
+    }
+
+    #[test]
+    fn neighbours_are_absent_for_unknown_paths() {
+        let posts = ordered_posts();
+        let (prev, next) = neighbours(&posts, Path::new("source/post/missing.md"));
+        assert!(prev.is_none());
+        assert!(next.is_none());
+    }
 
     #[test]
     fn render_adds_heading_anchors_matching_toc_slugs() {

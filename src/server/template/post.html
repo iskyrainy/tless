@@ -60,12 +60,31 @@
         <div class="post-body">
             <div class="article-content">{{ content | safe }}</div>
         </div>
+        {% set toc_html = toc(content=markdown, min_level=2, max_level=3) %}
+        {% if toc_html %}
         <aside class="toc-rail">
             <nav class="toc-nav" aria-label="On this page">
                 <span class="rail-label">On this page</span>
-                {{ toc(content=markdown, min_level=2, max_level=3) | safe }}
+                {{ toc_html | safe }}
             </nav>
         </aside>
+        {% endif %}
     </div>
+    {% if prev_post or next_post %}
+    <nav class="post-nav" aria-label="Post navigation">
+        {% if prev_post %}
+        <a class="post-nav-link post-nav-prev" href="/post/{{ slugify(str=prev_post.path, is_path=true) }}" rel="prev">
+            <span class="post-nav-label">← Previous</span>
+            <span class="post-nav-title">{{ prev_post.title }}</span>
+        </a>
+        {% endif %}
+        {% if next_post %}
+        <a class="post-nav-link post-nav-next" href="/post/{{ slugify(str=next_post.path, is_path=true) }}" rel="next">
+            <span class="post-nav-label">Next →</span>
+            <span class="post-nav-title">{{ next_post.title }}</span>
+        </a>
+        {% endif %}
+    </nav>
+    {% endif %}
 </article>
 {% endblock main %}
