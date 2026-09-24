@@ -91,6 +91,8 @@ pub fn parse_file(path: &Path) -> Result<(Metadata, String)> {
             .filter_map(|t| t.as_str().map(|s| s.to_string()))
             .collect();
         metadata.tag = Some(tag_list);
+    } else if let Some(t) = frontmatter.get("tag").and_then(|v| v.as_str()) {
+        metadata.tag = Some(vec![t.to_string()]);
     }
     if let Some(category) = frontmatter.get("category").and_then(|v| v.as_array()) {
         let category_list = category
@@ -98,6 +100,8 @@ pub fn parse_file(path: &Path) -> Result<(Metadata, String)> {
             .filter_map(|c| c.as_str().map(|s| s.to_string()))
             .collect();
         metadata.category = Some(category_list);
+    } else if let Some(c) = frontmatter.get("category").and_then(|v| v.as_str()) {
+        metadata.category = Some(vec![c.to_string()]);
     }
     metadata.excerpt = excerpt(md_body);
     Ok((metadata, md_body.to_string()))

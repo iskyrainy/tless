@@ -1,23 +1,28 @@
 {% extends "base.html" %}
 {% block main %}
-<header class="page-header">
-    <h1 class="post-title">{{ name }}</h1>
-    <div class="post-meta">{{ posts | length }} post(s)</div>
-</header>
-{% for p in posts %}
-<article class="post-entry">
-    <header class="entry-header">
-        <h2><a href="/post/{{ slugify(str=p.title) }}">{{ p.title }}</a></h2>
-    </header>
-    <footer class="entry-footer">
-        {% if p.date %}
-        <span class="entry-date"><time>{{ date(ts=p.date, fmt="%Y-%m-%d") }}</time></span>
-        {% endif %}
-        {% if p.tag %}
-        <span class="entry-tags">{% for t in p.tag %}<span>#{{ t }}</span>{% endfor %}</span>
-        {% endif %}
-    </footer>
-</article>
-{% endfor %}
-<p class="back-link"><a href="/category">← All categories</a></p>
+<div class="page">
+    <h1 class="page-title">{{ name }}</h1>
+    <p class="archive-count">{{ posts | length }} post(s)</p>
+    <div class="post-list">
+        {% for p in posts %}
+        <article class="post-entry">
+            <div class="entry-body">
+                <time class="date" datetime="{{ p.date }}">{{ date(ts=p.date, fmt="%B %-d, %Y") }}</time>
+                <a class="entry-link" href="/post/{{ slugify(str=p.path, is_path=true) }}">
+                    <h2 class="entry-title">{{ p.title }}</h2>
+                </a>
+                {% if p.excerpt %}<p class="entry-excerpt">{{ p.excerpt }}</p>{% endif %}
+                <div class="bylines">
+                    <div class="avatar-stack"><span class="avatar">{{ site.config.author | truncate(length=1, end="") }}</span></div>
+                    <span class="byline-name">{{ site.config.author }}</span>
+                    {% if p.tag %}
+                    <span class="entry-cats">{% for t in p.tag %}<a href="/tag/{{ t }}">{{ t }}</a>{% endfor %}</span>
+                    {% endif %}
+                </div>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+    <p class="back-link"><a href="/category">← All categories</a></p>
+</div>
 {% endblock main %}

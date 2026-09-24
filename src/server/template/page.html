@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block main %}
-<article class="post">
-    <h1 class="post-title">{{ title }}</h1>
-    <div class="post-content">{{ content | safe }}</div>
-</article>
+<div class="page">
+    <h1 class="page-title">{{ title }}</h1>
+    <div class="article-content">{{ content | safe }}</div>
+</div>
 {% endblock main %}

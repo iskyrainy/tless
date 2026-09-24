@@ -1,5 +1,6 @@
 //! Built-in Tera template functions and Rhai helper loading.
 
+use std::path::PathBuf;
 use std::{fmt::Write, fs, path::Path, sync::Arc};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -645,7 +646,19 @@ fn level_to_usize(level: HeadingLevel) -> usize {
 /// Template `slugify()`; see [crate::util::slugify] for the algorithm.
 fn to_slug(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
     let input = kwargs.must_get::<String>("str")?;
-    Ok(Value::normal_string(&slugify(input.as_str())))
+    let p_flag = kwargs.get::<bool>("is_path")?.unwrap_or(false);
+    if p_flag {
+        let path = PathBuf::from(input);
+        Ok(Value::normal_string(&slugify(
+            path.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+                .as_str(),
+        )))
+    } else {
+        Ok(Value::normal_string(&slugify(input.as_str())))
+    }
 }
 
 fn escape_html_attr(input: &str) -> String {

@@ -1,46 +1,171 @@
-/* Code block syntax highlighting (highlight.js token classes).
-   Code blocks keep a dark background in both themes, so tokens use a
-   single palette. See base.html for the highlighter script. */
+/* Code highlighting (highlight.js classes).
+   Code blocks follow the theme, like the Cloudflare blog: a light block with
+   dark tokens in light mode, a dark block with warm tokens in dark mode. */
+
 .hljs {
-    color: #e8e8e8;
     background: transparent;
+    color: var(--text);
 }
 
+/* Light palette */
 .hljs-comment, .hljs-quote {
-    color: #7f848e;
+    color: #6a737d;
     font-style: italic;
 }
 
-.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag, .hljs-type {
-    color: #c678dd;
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag {
+    color: #d73a49;
 }
 
-.hljs-string, .hljs-regexp, .hljs-addition, .hljs-attribute {
-    color: #98c379;
+.hljs-string, .hljs-regexp, .hljs-addition, .hljs-meta .hljs-string {
+    color: #032f62;
 }
 
-.hljs-number, .hljs-built_in, .hljs-symbol, .hljs-bullet, .hljs-meta .hljs-keyword {
-    color: #d19a66;
+.hljs-number, .hljs-built_in, .hljs-symbol, .hljs-bullet {
+    color: #005cc5;
 }
 
 .hljs-title, .hljs-title.function_, .hljs-title.class_, .hljs-section, .hljs-selector-id {
-    color: #61afef;
+    color: #6f42c1;
 }
 
-.hljs-attr, .hljs-variable, .hljs-template-variable, .hljs-selector-class {
-    color: #e06c75;
+.hljs-name, .hljs-tag, .hljs-selector-class, .hljs-selector-pseudo {
+    color: #22863a;
 }
 
-.hljs-tag, .hljs-name, .hljs-selector-pseudo {
-    color: #e06c75;
+.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable {
+    color: #e36209;
 }
 
 .hljs-meta, .hljs-link {
-    color: #56b6c2;
+    color: #005cc5;
+}
+
+.hljs-type, .hljs-params, .hljs-property {
+    color: #24292e;
 }
 
 .hljs-deletion {
-    color: #e06c75;
+    color: #b31d28;
+}
+
+/* Dark palette */
+html[data-theme="dark"] .hljs-comment,
+html[data-theme="dark"] .hljs-quote {
+    color: #a0a0a0;
+}
+
+html[data-theme="dark"] .hljs-keyword,
+html[data-theme="dark"] .hljs-selector-tag,
+html[data-theme="dark"] .hljs-literal,
+html[data-theme="dark"] .hljs-doctag {
+    color: #ff8a50;
+}
+
+html[data-theme="dark"] .hljs-string,
+html[data-theme="dark"] .hljs-regexp,
+html[data-theme="dark"] .hljs-addition,
+html[data-theme="dark"] .hljs-meta .hljs-string {
+    color: #99ffe4;
+}
+
+html[data-theme="dark"] .hljs-number,
+html[data-theme="dark"] .hljs-built_in,
+html[data-theme="dark"] .hljs-symbol,
+html[data-theme="dark"] .hljs-bullet {
+    color: #ffc799;
+}
+
+html[data-theme="dark"] .hljs-title,
+html[data-theme="dark"] .hljs-title.function_,
+html[data-theme="dark"] .hljs-title.class_,
+html[data-theme="dark"] .hljs-section,
+html[data-theme="dark"] .hljs-selector-id {
+    color: #ffc799;
+}
+
+html[data-theme="dark"] .hljs-name,
+html[data-theme="dark"] .hljs-tag,
+html[data-theme="dark"] .hljs-selector-class,
+html[data-theme="dark"] .hljs-selector-pseudo {
+    color: #99ffe4;
+}
+
+html[data-theme="dark"] .hljs-attr,
+html[data-theme="dark"] .hljs-attribute,
+html[data-theme="dark"] .hljs-variable,
+html[data-theme="dark"] .hljs-template-variable {
+    color: #ff8a50;
+}
+
+html[data-theme="dark"] .hljs-meta,
+html[data-theme="dark"] .hljs-link {
+    color: #a0a0a0;
+}
+
+html[data-theme="dark"] .hljs-type,
+html[data-theme="dark"] .hljs-params,
+html[data-theme="dark"] .hljs-property {
+    color: #f0e3de;
+}
+
+html[data-theme="dark"] .hljs-deletion {
+    color: #ff8a50;
+}
+
+/* System dark, no explicit choice */
+@media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) .hljs-comment,
+    html:not([data-theme="light"]) .hljs-quote {
+        color: #a0a0a0;
+    }
+
+    html:not([data-theme="light"]) .hljs-keyword,
+    html:not([data-theme="light"]) .hljs-selector-tag,
+    html:not([data-theme="light"]) .hljs-literal,
+    html:not([data-theme="light"]) .hljs-doctag {
+        color: #ff8a50;
+    }
+
+    html:not([data-theme="light"]) .hljs-string,
+    html:not([data-theme="light"]) .hljs-regexp,
+    html:not([data-theme="light"]) .hljs-addition,
+    html:not([data-theme="light"]) .hljs-meta .hljs-string {
+        color: #99ffe4;
+    }
+
+    html:not([data-theme="light"]) .hljs-number,
+    html:not([data-theme="light"]) .hljs-built_in,
+    html:not([data-theme="light"]) .hljs-symbol,
+    html:not([data-theme="light"]) .hljs-bullet,
+    html:not([data-theme="light"]) .hljs-title,
+    html:not([data-theme="light"]) .hljs-title.function_,
+    html:not([data-theme="light"]) .hljs-title.class_,
+    html:not([data-theme="light"]) .hljs-section,
+    html:not([data-theme="light"]) .hljs-selector-id {
+        color: #ffc799;
+    }
+
+    html:not([data-theme="light"]) .hljs-name,
+    html:not([data-theme="light"]) .hljs-tag,
+    html:not([data-theme="light"]) .hljs-selector-class,
+    html:not([data-theme="light"]) .hljs-selector-pseudo {
+        color: #99ffe4;
+    }
+
+    html:not([data-theme="light"]) .hljs-attr,
+    html:not([data-theme="light"]) .hljs-attribute,
+    html:not([data-theme="light"]) .hljs-variable,
+    html:not([data-theme="light"]) .hljs-template-variable,
+    html:not([data-theme="light"]) .hljs-deletion {
+        color: #ff8a50;
+    }
+
+    html:not([data-theme="light"]) .hljs-type,
+    html:not([data-theme="light"]) .hljs-params,
+    html:not([data-theme="light"]) .hljs-property {
+        color: #f0e3de;
+    }
 }
 
 .hljs-emphasis {
@@ -48,5 +173,5 @@
 }
 
 .hljs-strong {
-    font-weight: 700;
+    font-weight: 600;
 }
