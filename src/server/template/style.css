@@ -201,6 +201,69 @@ a:hover {
     gap: 12px;
 }
 
+/* Language switcher, sitting just before the RSS button */
+.lang-switch {
+    position: relative;
+}
+
+.lang-switch > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--display);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    list-style: none;
+}
+
+.lang-switch > summary::-webkit-details-marker {
+    display: none;
+}
+
+.lang-switch > summary:hover,
+.lang-switch[open] > summary {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.lang-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 60;
+    min-width: 140px;
+    margin: 0;
+    padding: 6px;
+    list-style: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--background);
+    box-shadow: var(--shadow);
+}
+
+.lang-menu a {
+    display: block;
+    padding: 6px 10px;
+    border-radius: 4px;
+    color: var(--display);
+    font-size: 14px;
+}
+
+.lang-menu a:hover {
+    background: var(--inline-code-bg);
+    text-decoration: none;
+}
+
+.lang-menu a[aria-current] {
+    color: var(--accent);
+    font-weight: 500;
+}
+
 .header-rss {
     display: inline-flex;
     align-items: center;
@@ -894,7 +957,14 @@ html[data-theme="dark"] .icon-sun {
     color: var(--display);
 }
 
+/* Pinned to their own columns so a lone neighbour keeps the slot it would have
+   occupied when both are present. */
+.post-nav-prev {
+    grid-column: 1;
+}
+
 .post-nav-next {
+    grid-column: 2;
     align-items: flex-end;
     text-align: right;
     background-image: var(--dash-y);
@@ -1137,6 +1207,12 @@ html[data-theme="dark"] .icon-sun {
         background-image: var(--dash-x);
         background-position: 0 0;
         background-size: 100% 1px;
+    }
+
+    /* Stacked, so both neighbours share the single column. */
+    .post-nav-prev,
+    .post-nav-next {
+        grid-column: 1;
     }
 
     .post-nav-next {

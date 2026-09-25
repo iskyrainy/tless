@@ -105,8 +105,7 @@ async fn render_terms(
                 .get(term)
                 .map(|class| class.posts.clone())
                 .unwrap_or_default();
-            let mut context = TeraContext::new();
-            context.insert("site", SITE.load().as_ref());
+            let mut context = base_context();
             context.insert("name", term);
             context.insert("title", term);
             context.insert("posts", &posts);
@@ -175,7 +174,7 @@ async fn render_file(
 ) -> Result<()> {
     let (metadata, md_body) = parse_file(src)?;
     let md_html_str = render(&md_body);
-    let mut context = TeraContext::new();
+    let mut context = base_context();
     context.insert("content", &md_html_str);
     context.insert("markdown", &md_body);
     context.insert("title", &metadata.title);
@@ -184,7 +183,10 @@ async fn render_file(
     context.insert("category", &metadata.category);
     context.insert("prev_post", &prev_post);
     context.insert("next_post", &next_post);
-    context.insert("site", SITE.load().as_ref());
+    if let Some(name) = src.file_stem().map(|s| s.to_string_lossy().into_owned()) {
+        let lang = page_lang(src, &rt);
+        context.insert("translations", &translations(&name, lang.as_deref()));
+    }
     let layout = metadata.layout.as_deref().unwrap_or(match rt {
         RenderType::OriginPost | RenderType::NonOriginPost => "post.html",
         RenderType::Page => "page.html",
@@ -209,6 +211,57 @@ async fn render_file(
         render_file_class(&metadata).await?;
     }
     Ok(())
+}
+
+/// One published version of a post: the original, or a translation of it.
+#[derive(Debug, serde::Serialize)]
+struct Translation {
+    /// Language code, empty for the original post.
+    lang: String,
+    url: String,
+    current: bool,
+}
+
+/// Every version of the post named `name` that exists: the original first, then
+/// each translation in `[i18n] target_lang` order. `current` is the language of
+/// the page being rendered, `None` for the original.
+fn translations(name: &str, current: Option<&str>) -> Vec<Translation> {
+    let file = format!("{name}.md");
+    let i18n_dir = get_source_path("i18n");
+    let mut list = vec![Translation {
+        lang: String::new(),
+        url: format!("/post/{name}/"),
+        current: current.is_none(),
+    }];
+    for lang in SITE.load().get_i18n_tl() {
+        if i18n_dir.join(lang).join(&file).exists() {
+            list.push(Translation {
+                lang: lang.clone(),
+                url: format!("/post/{lang}/{name}"),
+                current: current == Some(lang.as_str()),
+            });
+        }
+    }
+    list
+}
+
+/// Context every layout starts from: the site model plus the variables the
+/// shared shell (`base.html`) may reference on any page. `translations` is
+/// empty outside post pages; `render_file` fills it in.
+fn base_context() -> TeraContext {
+    let mut context = TeraContext::new();
+    context.insert("site", SITE.load().as_ref());
+    context.insert("translations", &Vec::<Translation>::new());
+    context
+}
+
+/// Language a page is rendered in: the `i18n/<lang>/` directory name for a
+/// translation, `None` for the original post and for pages.
+fn page_lang(src: &Path, rt: &RenderType) -> Option<String> {
+    if !matches!(rt, RenderType::NonOriginPost) {
+        return None;
+    }
+    Some(src.parent()?.file_name()?.to_string_lossy().into_owned())
 }
 
 /// The posts either side of `path` in the newest-first feed: the one published
@@ -361,8 +414,7 @@ async fn render_i18n_md(dir: &Path) -> Result<()> {
 
 /// Render the tag and category index pages.
 async fn render_class() -> Result<()> {
-    let mut context = TeraContext::new();
-    context.insert("site", SITE.load().as_ref());
+    let mut context = base_context();
     context.insert("title", "Categories");
     let category_dir = get_public_path(".").join("category");
     fs::create_dir_all(&category_dir)
@@ -625,12 +677,11 @@ async fn render_home(site: &Site) -> Result<()> {
         info!("Skipping home page");
         return Ok(());
     }
-    let mut context = TeraContext::new();
+    let mut context = base_context();
     // empty values keep `{% if content %}` / `{% if title %}` blocks happy
     context.insert("content", "");
     context.insert("title", "");
     context.insert("recent_posts", &recent_posts(site));
-    context.insert("site", site);
     match tera.render("index.html", &context) {
         Ok(rendered) => {
             fs::write(get_public_path("index.html"), rendered)
