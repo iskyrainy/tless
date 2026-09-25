@@ -227,16 +227,6 @@ fn handle_site(site: Site) -> Result<()> {
         }
     }
 
-    if site.generate {
-        info!("Generating publish/ ...");
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .context("Failed to create render runtime")?;
-        runtime.block_on(server::render_all())?;
-        info!("Generated public/");
-    }
-
     if site.translate {
         info!("Generating i18n/ ...");
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -245,6 +235,16 @@ fn handle_site(site: Site) -> Result<()> {
             .context("Failed to create translate runtime")?;
         runtime.block_on(server::translate())?;
         info!("Generated i18n/");
+    }
+
+    if site.generate {
+        info!("Generating publish/ ...");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("Failed to create render runtime")?;
+        runtime.block_on(server::render_all())?;
+        info!("Generated public/");
     }
 
     Ok(())
