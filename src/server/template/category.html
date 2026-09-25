@@ -17,12 +17,12 @@
                 <div class="avatar-stack"><span class="avatar">{{ site.config.author | truncate(length=1, end="") }}</span></div>
                 <span class="byline-name">{{ site.config.author }}</span>
                 {% if p.tag %}
-                <span class="entry-cats">{% for t in p.tag %}<a href="/tag/{{ t }}">{{ t }}</a>{% endfor %}</span>
+                <span class="entry-cats">{% for t in p.tag %}{{ link(path="/tag/" ~ t, text=t) }}{% endfor %}</span>
                 {% endif %}
             </div>
         </article>
         {% endfor %}
     </div>
-    <p class="back-link"><a href="/category">← All categories</a></p>
+    <p class="back-link">{{ link(path="/category", text="← All categories") }}</p>
 </div>
 {% endblock main %}

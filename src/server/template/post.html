@@ -7,7 +7,7 @@
             <div class="avatar-stack">
                 <span class="avatar">{{ site.config.author | truncate(length=1, end="") }}</span>
             </div>
-            <span class="byline-name"><a href="/">{{ site.config.author }}</a></span>
+            <span class="byline-name">{{ link(path="/", text=site.config.author) }}</span>
             {% if date %}
             <span class="byline-sep">•</span>
             <time class="date" datetime="{{ date }}">{{ date(ts=date, fmt="%B %-d, %Y") }}</time>
@@ -23,7 +23,7 @@
                 <div class="rail-group">
                     <span class="rail-sub">Category</span>
                     <div class="rail-terms">
-                        {% for c in category %}<a class="rail-tag rail-tag-cat" href="/category/{{ c }}">{{ c }}</a>{% endfor %}
+                        {% for c in category %}{{ link(path={"href": "/category/" ~ c, "class": "rail-tag rail-tag-cat"}, text=c) }}{% endfor %}
                     </div>
                 </div>
                 {% endif %}
@@ -31,7 +31,7 @@
                 <div class="rail-group">
                     <span class="rail-sub">Tags</span>
                     <div class="rail-terms">
-                        {% for t in tag %}<a class="rail-tag" href="/tag/{{ t }}">{{ t }}</a>{% endfor %}
+                        {% for t in tag %}{{ link(path={"href": "/tag/" ~ t, "class": "rail-tag"}, text=t) }}{% endfor %}
                     </div>
                 </div>
                 {% endif %}

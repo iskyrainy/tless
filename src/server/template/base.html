@@ -5,17 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if title %}{{ title }} | {% endif %}{{ site.config.title }}</title>
     <meta name="description" content="{{ site.config.description }}">
-    {% if site.config.favicon %}<link rel="icon" href="{{ site.config.favicon }}">{% endif %}
-    <link rel="alternate" type="application/atom+xml" href="/atom.xml" title="{{ site.config.title }}">
+    {% if site.config.favicon %}{{ favicon(path=site.config.favicon) }}{% endif %}
+    {{ feed(path="/atom.xml", type="application/atom+xml", title=site.config.title) }}
     <script>
     (() => document.documentElement.dataset.theme = localStorage.getItem('cf-theme')
         || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'))();
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
-    <link rel="stylesheet" href="/assets/style.css">
-    <link rel="stylesheet" href="/assets/highlight.css">
+    {{ css(path=[
+        "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap",
+        "/assets/style.css",
+        "/assets/highlight.css"
+    ]) }}
 </head>
 <body>
 <header class="site-header">
@@ -24,7 +26,7 @@
             <span class="brand-name">{{ site.config.title }}</span>
         </a>
         <nav class="nav" aria-label="Main">
-            {% for item in site.config.menu %}<a href="{{ item.link }}">{{ item.name }}</a>{% endfor %}
+            {% for item in site.config.menu %}{{ link(path=item.link, text=item.name) }}{% endfor %}
         </nav>
         <div class="header-actions">
             <a class="header-rss" href="/atom.xml" aria-label="RSS feed">
@@ -44,8 +46,8 @@
     <div class="footer-bar">
         <span class="footer-copy">© {{ site.config.rights }}</span>
         <nav class="footer-links" aria-label="Footer">
-            {% for item in site.config.menu %}<a href="{{ item.link }}">{{ item.name }}</a>{% endfor %}
-            <a href="/atom.xml">RSS</a>
+            {% for item in site.config.menu %}{{ link(path=item.link, text=item.name) }}{% endfor %}
+            {{ link(path="/atom.xml", text="RSS") }}
         </nav>
     </div>
 </footer>
@@ -190,7 +192,7 @@ document.querySelectorAll('[data-share]').forEach((btn) => {
     });
 });
 </script>
-<script defer src="/assets/highlight.js"></script>
+{{ js(path={"src": "/assets/highlight.js", "defer": ""}) }}
 <script>
 // highlight.js rewrites `class="language-rust"` into the `hljs-*` token classes
 // that highlight.css styles. It is vendored with the theme rather than pulled
