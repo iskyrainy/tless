@@ -339,6 +339,9 @@ pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
 
 async fn render_i18n() -> Result<()> {
     let i18n_dir = get_source_path("i18n");
+    if !i18n_dir.exists() {
+        return Ok(());
+    }
     let public_post_dir = get_public_path("post");
     copy_dir_recursive(&i18n_dir, &public_post_dir)?;
     render_i18n_md(&public_post_dir).await

@@ -217,11 +217,16 @@ base theme's language switcher is built from:
 their own path. `current` marks the page being rendered, so a theme can highlight it.
 
 Code blocks, inline code and frontmatter keys pass through untouched; only `title`,
-`description`, `summary` and `excerpt` are translated. Translation prompt see [SYSTEM_PROMPT](server/i18n.rs#56-69).
+`description`, `summary` and `excerpt` are translated. Translation prompt see [SYSTEM_PROMPT](src/server/i18n.rs#L56).
 
 ## Theme
 
 The bundled `base` theme follows the layout of the [Cloudflare blog](https://blog.cloudflare.com/).
+
+Code blocks use the [Tokyo Night](https://github.com/folke/tokyonight.nvim) palette — Tokyo
+Night Day in light mode, Tokyo Night in dark mode. The token colours are `--hl-*` custom
+properties at the top of `assets/highlight.css`, so retheming highlighting means editing that
+one block; the block background still comes from `--code-bg` in `style.css`.
 
 ## Deployment
 
