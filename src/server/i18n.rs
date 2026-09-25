@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    fmt::Display,
     sync::{Arc, LazyLock},
 };
 
@@ -14,7 +14,7 @@ use tokio::{
     io::AsyncWriteExt,
     sync::RwLock,
 };
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     error,
@@ -102,6 +102,9 @@ macro_rules! make_translate {
                         },
                     ],
                     "stream": false,
+                    "thinking": {
+                        "type": "disabled"
+                    },
                 });
 
                 match client
@@ -139,9 +142,7 @@ macro_rules! make_translate {
 }
 
 enum Providers {
-    OpenAI,
     Deepseek,
-    Qwen,
     Kimi,
     Glm,
 }
@@ -149,14 +150,10 @@ enum Providers {
 impl Providers {
     fn create(provider: &str) -> Result<Self> {
         let s = match provider {
-            "openai" => Self::OpenAI,
             "deepseek" => Self::Deepseek,
-            "qwen" => Self::Qwen,
             "kimi" => Self::Kimi,
             "glm" => Self::Glm,
-            _ => bail!(
-                "Get not support provider, expected <-- openai | deepseek | qwen | kimi |glm -->"
-            ),
+            _ => bail!("Get not support provider, expected <-- deepseek | kimi | glm -->"),
         };
         Ok(s)
     }
@@ -167,29 +164,20 @@ impl Providers {
             model: model.to_owned(),
         };
         match self {
-            Providers::OpenAI => Box::new(OpenaiProvider(info)),
             Providers::Deepseek => Box::new(DeepseekProvider(info)),
-            Providers::Qwen => Box::new(QwenProvider(info)),
             Providers::Kimi => Box::new(KimiProvider(info)),
             Providers::Glm => Box::new(GlmProvider(info)),
         }
     }
 }
 
-struct OpenaiProvider(ProviderInfo);
 struct DeepseekProvider(ProviderInfo);
-struct QwenProvider(ProviderInfo);
 struct KimiProvider(ProviderInfo);
 struct GlmProvider(ProviderInfo);
 
-make_provider!(OpenaiProvider, "https://api.openai.com/v1/responses");
 make_provider!(
     DeepseekProvider,
     "https://api.deepseek.com/chat/completions"
-);
-make_provider!(
-    QwenProvider,
-    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 );
 make_provider!(KimiProvider, "https://api.moonshot.cn/v1/chat/completions");
 make_provider!(
@@ -197,9 +185,7 @@ make_provider!(
     "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 );
 
-make_translate!(OpenaiProvider);
 make_translate!(DeepseekProvider);
-make_translate!(QwenProvider);
 make_translate!(KimiProvider);
 make_translate!(GlmProvider);
 
@@ -208,28 +194,36 @@ pub async fn translate() -> Result<()> {
     let p =
         Providers::create(&site.i18n.provider)?.into_backend(&site.i18n.api_key, &site.i18n.model);
 
-    // TODO: clean old post i18n
-
-    for tl in &site.i18n.target_lang {
+    let mut tls = vec![];
+    for tl in site.get_i18n_tl() {
         if let Some(tl) = Language::from_code(tl) {
-            translate_tl(&*p, tl).await?;
+            tls.push(tl);
         } else {
             warn!("Not a standard target language: {tl}");
         }
     }
+    translate_tls(&*p, tls).await?;
     dump_hash().await?;
     Ok(())
 }
 
-async fn translate_tl(provider: &dyn TranslationBackend, target_lang: Language) -> Result<()> {
+async fn translate_tls(
+    provider: &dyn TranslationBackend,
+    target_langs: Vec<Language>,
+) -> Result<()> {
     let provider = Arc::new(provider);
     let site = SITE.load();
-    let target_lang: String = target_lang.into();
-    let target_lang = target_lang.as_str();
+    let target_langs = Arc::new(
+        target_langs
+            .iter()
+            .map(|tl| tl.get_str_value())
+            .collect::<Vec<_>>(),
+    );
 
     stream::iter(&site.post)
         .map(|d| {
             let p = provider.clone();
+            let tls = target_langs.clone();
             async move {
                 let Some(name) = d.path.file_name().and_then(|s| s.to_str()) else {
                     return Ok(());
@@ -240,31 +234,40 @@ async fn translate_tl(provider: &dyn TranslationBackend, target_lang: Language) 
                     &d.path.display()
                 ))?;
                 let new = compute_md5(&md_str);
-                let p_str = d.path.to_string_lossy().to_string();
-                if let Some(old) = POST_HASH.read().await.get(&p_str)
+                let name_key = name.to_string();
+                if let Some(old) = POST_HASH.read().await.get(&name_key)
                     && old.eq(&new)
                 {
                     return Ok(());
                 }
-                POST_HASH.write().await.insert(p_str, new);
+                POST_HASH.write().await.insert(name_key, new);
 
-                let dst = get_source_path("i18n").join(target_lang).join(name);
-                let mut file = File::create(&dst).await.context(format!(
-                    "Failed to create translated markdown: {}",
-                    &dst.display()
-                ))?;
-
-                let target_str = p.translate(&md_str, target_lang).await?;
-                file.write_all_buf(&mut target_str.as_bytes())
-                    .await
-                    .context(format!(
-                        "Failed to write translated markdown: {}",
-                        &dst.display()
+                for target_lang in tls.iter() {
+                    let dst_dir = get_source_path("i18n").join(target_lang);
+                    if !dst_dir.exists() {
+                        fs::create_dir_all(&dst_dir)
+                            .await
+                            .context(format!("Failed to create i18n dir: {}", dst_dir.display()))?;
+                    }
+                    let dst_file = dst_dir.join(name);
+                    let mut file = File::create(&dst_file).await.context(format!(
+                        "Failed to create translated markdown: {}",
+                        &dst_file.display()
                     ))?;
-                file.flush().await.context(format!(
-                    "Failed to flush translated markdown: {}",
-                    &dst.display()
-                ))?;
+
+                    let target_str = p.translate(&md_str, target_lang).await?;
+                    file.write_all_buf(&mut target_str.as_bytes())
+                        .await
+                        .context(format!(
+                            "Failed to write translated markdown: {}",
+                            &dst_file.display()
+                        ))?;
+                    file.flush().await.context(format!(
+                        "Failed to flush translated markdown: {}",
+                        &dst_file.display()
+                    ))?;
+                }
+                info!("Translate {name} finished");
 
                 Ok(())
             }
@@ -299,33 +302,9 @@ static POST_HASH: LazyLock<RwLock<HashMap<String, String>>> = LazyLock::new(|| {
             }),
         )
     } else {
-        let mut map = HashMap::new();
-        let site = SITE.load();
-        for post in &site.post {
-            map.insert(
-                post.path.to_string_lossy().to_string(),
-                compute_file_md5(&post.path).unwrap_or_else(|e| error::fatal(e.to_string())),
-            );
-        }
-        std::fs::write(
-            &path,
-            serde_json::to_string(&map)
-                .unwrap_or_else(|_| error::fatal("Failed to serialize map into string")),
-        )
-        .unwrap_or_else(|_| {
-            error::fatal("Failed to dump posts md5 value into source/post/.post_hash.json")
-        });
-
-        RwLock::new(map)
+        RwLock::new(HashMap::new())
     }
 });
-
-#[inline]
-pub fn compute_file_md5(p: &PathBuf) -> Result<String> {
-    let post_str =
-        std::fs::read_to_string(p).context(format!("Failed to open file: {}", p.display()))?;
-    Ok(compute_md5(&post_str))
-}
 
 #[inline]
 pub fn compute_md5(text: &String) -> String {
@@ -334,7 +313,7 @@ pub fn compute_md5(text: &String) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-enum Language {
+pub enum Language {
     #[serde(rename = "af")]
     Afrikaans,
     #[serde(rename = "sq")]
@@ -501,6 +480,13 @@ impl Language {
     pub fn from_code(code: &str) -> Option<Self> {
         serde_json::from_value(Value::String(code.to_string())).ok()
     }
+
+    pub fn get_str_value(&self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default()
+    }
 }
 
 impl TryFrom<&str> for Language {
@@ -518,5 +504,11 @@ impl From<Language> for String {
             .ok()
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_default()
+    }
+}
+
+impl Display for Language {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.get_str_value())
     }
 }

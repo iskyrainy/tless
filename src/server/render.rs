@@ -158,7 +158,8 @@ async fn render_file_class(metadata: &Metadata) -> Result<()> {
 }
 
 enum RenderType {
-    Post,
+    OriginPost,
+    NonOriginPost,
     Page,
 }
 
@@ -185,7 +186,7 @@ async fn render_file(
     context.insert("next_post", &next_post);
     context.insert("site", SITE.load().as_ref());
     let layout = metadata.layout.as_deref().unwrap_or(match rt {
-        RenderType::Post => "post.html",
+        RenderType::OriginPost | RenderType::NonOriginPost => "post.html",
         RenderType::Page => "page.html",
     });
     match TERA.load().render(layout, &context) {
@@ -204,7 +205,7 @@ async fn render_file(
             bail!("Failed to render {}: {}", metadata.title, e);
         }
     };
-    if let RenderType::Post = rt {
+    if let RenderType::OriginPost = rt {
         render_file_class(&metadata).await?;
     }
     Ok(())
@@ -217,7 +218,10 @@ fn neighbours<'a>(
     ordered: &'a [Metadata],
     path: &Path,
 ) -> (Option<&'a Metadata>, Option<&'a Metadata>) {
-    let Some(index) = ordered.iter().position(|post| post.path == path) else {
+    let Some(index) = ordered
+        .iter()
+        .position(|post| post.path.file_stem() == path.file_stem())
+    else {
         return (None, None);
     };
     let prev = ordered.get(index + 1);
@@ -242,7 +246,7 @@ pub(crate) async fn render_post(paths: Vec<&PathBuf>) -> Result<()> {
                         .context(format!("Failed to create public/post/{name}/"))?;
                     let dst_file = dst_dir.join("index.html");
                     let (prev, next) = neighbours(&ordered, path);
-                    render_file(path, &dst_file, RenderType::Post, prev, next).await?;
+                    render_file(path, &dst_file, RenderType::OriginPost, prev, next).await?;
                 }
                 Ok(())
             }
@@ -270,6 +274,81 @@ pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
                     let dst_file = dst_dir.join("index.html");
                     render_file(path, &dst_file, RenderType::Page, None, None).await?;
                 }
+                Ok(())
+            }
+        })
+        .buffer_unordered(get_cpu())
+        .collect::<Vec<Result<()>>>()
+        .await
+        .into_iter()
+        .collect::<Result<()>>()
+}
+
+async fn render_i18n() -> Result<()> {
+    let i18n_dir = get_source_path("i18n");
+    let public_post_dir = get_public_path("post");
+    copy_dir_recursive(&i18n_dir, &public_post_dir)?;
+    render_i18n_md(&public_post_dir).await
+}
+
+async fn render_i18n_md(dir: &Path) -> Result<()> {
+    let mut reader = fs::read_dir(&dir)
+        .await
+        .context(format!("Failed to read dir: {}", dir.display()))?;
+    let mut list = vec![];
+    while let Some(i) = reader
+        .next_entry()
+        .await
+        .context("Failed to get next dir entry")?
+    {
+        let ip = i.path();
+        if !ip.is_dir() {
+            continue;
+        }
+        let mut sub_reader = fs::read_dir(&ip)
+            .await
+            .context(format!("Failed to read dir: {}", ip.display()))?;
+        while let Some(si) = sub_reader
+            .next_entry()
+            .await
+            .context("Failed to get next sub dir entry")?
+        {
+            let sip = si.path();
+            if sip.is_file() && sip.extension().is_some_and(|e| e.eq("md")) {
+                list.push(sip);
+            }
+        }
+    }
+
+    let ordered = Arc::new(recent_posts(SITE.load().as_ref()));
+    stream::iter(list)
+        .map(|src| {
+            let ordered = ordered.clone();
+            async move {
+                let file_stem = src
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if file_stem.is_empty() {
+                    return Ok(());
+                }
+                let dst_dir = src
+                    .parent()
+                    .map(|d| d.to_path_buf())
+                    .unwrap()
+                    .join(&file_stem);
+                if !dst_dir.exists() {
+                    fs::create_dir_all(&dst_dir)
+                        .await
+                        .context(format!("Failed to create dir: {}", dst_dir.display()))?;
+                }
+                let dst_file = dst_dir.join("index.html");
+                let (prev, next) = neighbours(&ordered, &src);
+                render_file(&src, &dst_file, RenderType::NonOriginPost, prev, next).await?;
+                fs::remove_file(&src)
+                    .await
+                    .context("Failed to clean i18n md file")?;
                 Ok(())
             }
         })
@@ -515,6 +594,7 @@ pub async fn render_all() -> Result<()> {
     render_class().await?;
     render_post(site.post.iter().map(|d| &d.path).collect::<Vec<_>>()).await?;
     render_page(site.page.iter().map(|d| &d.path).collect::<Vec<_>>()).await?;
+    render_i18n().await?;
 
     gen_atom().await?;
     gen_sitemap().await?;

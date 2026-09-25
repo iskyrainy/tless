@@ -7,9 +7,11 @@ pub(crate) fn slugify(input: &str) -> String {
     let mut slug = String::new();
     let mut prev_dash = false;
     for ch in input.chars() {
-        let lower = ch.to_ascii_lowercase();
-        if lower.is_ascii_alphanumeric() {
-            slug.push(lower);
+        // keep non-ascii characters and turn ascii characters to lowercase
+        if ch.is_alphanumeric() {
+            for c in ch.to_lowercase() {
+                slug.push(c);
+            }
             prev_dash = false;
         } else if !prev_dash && !slug.is_empty() {
             slug.push('-');
@@ -47,7 +49,8 @@ mod tests {
         assert_eq!(slugify("First Post"), "first-post");
         assert_eq!(slugify("a---b"), "a-b");
         assert_eq!(slugify("-x-"), "x");
-        assert_eq!(slugify("café au lait"), "caf-au-lait");
+        assert_eq!(slugify("café au lait"), "café-au-lait");
+        assert_eq!(slugify("你好  ting"), "你好-ting");
         assert_eq!(slugify(""), "");
     }
 }

@@ -31,6 +31,7 @@ mod run;
 mod site;
 mod template;
 
+pub use i18n::Language;
 pub use i18n::translate;
 pub use render::render_all;
 pub use run::run;
@@ -63,6 +64,10 @@ impl Site {
             config: SiteConfig::default(),
             i18n: I18nConfig::default(),
         }
+    }
+
+    pub fn get_i18n_tl(&self) -> &Vec<String> {
+        &self.i18n.target_lang
     }
 }
 

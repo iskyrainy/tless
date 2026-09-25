@@ -105,40 +105,52 @@ pub fn parse_file(path: &Path) -> Result<(Metadata, String)> {
     Ok((metadata, md_body.to_string()))
 }
 
-/// First paragraph of a markdown body as plain text, for post listings.
-/// Headings, code blocks and images are skipped; links keep their text.
+/// First real paragraph of a markdown body as plain text, for post listings.
+/// Skips headings, code blocks, tables and images; links keep their text.
 fn excerpt(body: &str) -> String {
-    for block in body.split("\n\n") {
-        let block = block.trim();
-        if block.is_empty() {
-            continue;
-        }
-        let mut text = String::new();
-        let mut skip = false;
-        let mut in_image = 0usize;
-        for event in Parser::new(block) {
-            match event {
-                Event::Start(Tag::Heading { .. }) | Event::Start(Tag::CodeBlock(_)) => {
-                    skip = true;
-                    break;
-                }
-                Event::Start(Tag::Image { .. }) => in_image += 1,
-                Event::End(TagEnd::Image) => in_image = in_image.saturating_sub(1),
-                // image alt text is not part of the excerpt
-                Event::Text(t) | Event::Code(t) if in_image == 0 => {
-                    if !text.is_empty() {
-                        text.push(' ');
-                    }
-                    text.push_str(t.trim());
-                }
-                _ => {}
+    let parser = Parser::new(body);
+
+    let mut text = String::new();
+    let mut in_paragraph = false;
+    let mut skip_depth = 0usize;
+    let mut in_image = 0usize;
+
+    for event in parser {
+        match event {
+            Event::Start(Tag::Heading { .. })
+            | Event::Start(Tag::CodeBlock(_))
+            | Event::Start(Tag::Table(_)) => {
+                skip_depth += 1;
             }
-        }
-        let text = text.trim();
-        if !skip && !text.is_empty() {
-            return truncate(text, 160);
+            Event::End(TagEnd::Heading(_))
+            | Event::End(TagEnd::CodeBlock)
+            | Event::End(TagEnd::Table) => {
+                skip_depth = skip_depth.saturating_sub(1);
+            }
+            Event::Start(Tag::Image { .. }) => in_image += 1,
+            Event::End(TagEnd::Image) => in_image = in_image.saturating_sub(1),
+            Event::Start(Tag::Paragraph) => in_paragraph = true,
+            Event::Text(t) | Event::Code(t) if in_paragraph && skip_depth == 0 && in_image == 0 => {
+                let cleaned: String = t.split_whitespace().collect::<Vec<_>>().join(" ");
+                if cleaned.is_empty() {
+                    continue;
+                }
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                text.push_str(&cleaned);
+            }
+            Event::End(TagEnd::Paragraph) if in_paragraph => {
+                in_paragraph = false;
+                let text = text.trim();
+                if skip_depth == 0 && !text.is_empty() {
+                    return truncate(text, 160);
+                }
+            }
+            _ => {}
         }
     }
+
     String::new()
 }
 

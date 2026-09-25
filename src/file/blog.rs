@@ -5,7 +5,10 @@ use std::{fs, path::PathBuf};
 use anyhow::{Context, Result, bail};
 use tracing::info;
 
-use crate::file::{ValidEntity, current_timestamp, get_path, parse_file};
+use crate::{
+    file::{ValidEntity, current_timestamp, get_path, parse_file},
+    server::{Language, SITE, get_source_path},
+};
 
 pub struct Post;
 
@@ -26,7 +29,7 @@ impl Post {
         let file_path = Self::validate_and_get_path(name)?;
         fs::write(&file_path, Self::base_blog_text())
             .context(format!("Failed to create draft/: {}", file_path.display()))?;
-        info!("Blog '{}' created in 'draft'", file_path.display());
+        info!("Blog '{name}' created in 'draft'");
         Ok(())
     }
 
@@ -49,6 +52,22 @@ impl Post {
         }
         fs::remove_file(&file_path)
             .context(format!("Failed to remove draft/: {}", file_path.display()))?;
+        let site = SITE.load();
+        if "post".eq(class) || "publish".eq(class) {
+            for tl in site.get_i18n_tl() {
+                if let Some(tl) = Language::from_code(tl) {
+                    let tl: String = tl.into();
+                    let p = get_source_path("i18n").join(tl).join(&slug);
+                    if fs::exists(&p).context(format!(
+                        "Failed to confirm i18n file status: {}",
+                        p.display()
+                    ))? {
+                        fs::remove_file(&p)
+                            .context(format!("Failed to remove i18n file: {}", p.display()))?;
+                    }
+                }
+            }
+        }
         info!("Blog '{}' removed from '{}'", name, class);
         Ok(())
     }
