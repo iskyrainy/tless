@@ -230,7 +230,7 @@ fn translations(name: &str, current: Option<&str>) -> Vec<Translation> {
     let i18n_dir = get_source_path("i18n");
     let mut list = vec![Translation {
         lang: String::new(),
-        url: format!("/post/{name}/"),
+        url: format!("/post/{name}"),
         current: current.is_none(),
     }];
     for lang in SITE.load().get_i18n_tl() {
