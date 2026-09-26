@@ -1,6 +1,6 @@
 [package]
 name = "tles"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 authors = ["gdhvxcj <wangnan5117@gmail.com>"]
 description = "A fast, easy blog site builder — write Markdown, preview live, deploy to GitHub Pages."
@@ -23,6 +23,7 @@ debug = false     # Exclude debug symbols entirely
 
 [dependencies]
 actix-web = "4"
+actix-cors = "0.7.2"
 arc-swap = "1.9.2"
 chrono = "0.4.45"
 chrono-tz = "0.10.4"
@@ -33,6 +34,7 @@ notify = { version = "8.2.0", features = ["serde"] }
 # TODO: decode in easy code then remove frontmatter-gen
 frontmatter-gen = "0.0.11"
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
 toml = "1.1.4"
 tera = { version = "2.3.0", features = ["fast", "glob_fs"] }
@@ -43,3 +45,13 @@ rhai = { version = "1.26.0", features = ["metadata", "sync"] }
 anyhow = "1.0.104"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tracing = "0.1.44"
+reqwest = { version = "0.13.5", default-features = false, features = [
+  "http2",
+  "charset",
+  "cookies",
+  "gzip",
+  "json",
+  "rustls",
+] }
+async-trait = "0.1.92"
+md5 = "0.8.1"

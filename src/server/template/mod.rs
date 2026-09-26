@@ -21,6 +21,12 @@ const CATEGORY_INDEX: &str = include_str!("category-index.html");
 
 const STYLE: &str = include_str!("style.css");
 const HIGHLIGHT: &str = include_str!("highlight.css");
+/// highlight.js v11.10.0 (BSD-3-Clause), vendored so that code highlighting
+/// does not depend on a CDN at runtime.
+const HIGHLIGHT_JS: &str = include_str!("highlight.js");
+/// Themes applied inside the giscus iframe, one per colour scheme.
+const GISCUS: &str = include_str!("giscus.css");
+const GISCUS_DARK: &str = include_str!("giscus-dark.css");
 
 /// Write the base site files, theme layouts and static assets into `site_dir`.
 pub(crate) fn write_base_site(site_dir: &Path) -> Result<()> {
@@ -52,7 +58,13 @@ pub(crate) fn write_base_site(site_dir: &Path) -> Result<()> {
 
     let assets_dir = site_dir.join("theme").join("base").join("assets");
     fs::create_dir_all(&assets_dir)?;
-    let resources = [("style.css", STYLE), ("highlight.css", HIGHLIGHT)];
+    let resources = [
+        ("style.css", STYLE),
+        ("highlight.css", HIGHLIGHT),
+        ("highlight.js", HIGHLIGHT_JS),
+        ("giscus.css", GISCUS),
+        ("giscus-dark.css", GISCUS_DARK),
+    ];
     for (name, text) in resources {
         fs::write(assets_dir.join(name), text)?;
     }

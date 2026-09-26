@@ -10,7 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDateTime};
 use chrono_tz::Tz;
 use futures::{StreamExt, stream};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html};
@@ -27,7 +27,7 @@ use crate::{
         ClassMap, SITE, Site, TERA, extract_root_path, get_layout_path, get_public_path,
         get_source_path,
     },
-    util::slugify,
+    util::{get_cpu, slugify, truncate},
 };
 
 /// Markdown default render options.
@@ -79,15 +79,6 @@ fn add_heading_ids(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
     out
 }
 
-#[inline]
-/// Worker count for the concurrent render pipelines.
-fn get_cpu() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        * 2
-}
-
 /// Render one page per term (`category.html` / `tag.html`) for the terms of
 /// `metadata`, skipping terms that already have a page in this build.
 async fn render_terms(
@@ -114,8 +105,7 @@ async fn render_terms(
                 .get(term)
                 .map(|class| class.posts.clone())
                 .unwrap_or_default();
-            let mut context = TeraContext::new();
-            context.insert("site", SITE.load().as_ref());
+            let mut context = base_context();
             context.insert("name", term);
             context.insert("title", term);
             context.insert("posts", &posts);
@@ -167,26 +157,38 @@ async fn render_file_class(metadata: &Metadata) -> Result<()> {
 }
 
 enum RenderType {
-    Post,
+    OriginPost,
+    NonOriginPost,
     Page,
 }
 
 #[inline]
 /// Render one source file through its layout (frontmatter `layout`, else the
 /// render-type default) into `dst`. Posts additionally emit taxonomy pages.
-async fn render_file(src: &Path, dst: &Path, rt: RenderType) -> Result<()> {
+async fn render_file(
+    src: &Path,
+    dst: &Path,
+    rt: RenderType,
+    prev_post: Option<&Metadata>,
+    next_post: Option<&Metadata>,
+) -> Result<()> {
     let (metadata, md_body) = parse_file(src)?;
     let md_html_str = render(&md_body);
-    let mut context = TeraContext::new();
+    let mut context = base_context();
     context.insert("content", &md_html_str);
     context.insert("markdown", &md_body);
     context.insert("title", &metadata.title);
     context.insert("date", &metadata.date);
     context.insert("tag", &metadata.tag);
     context.insert("category", &metadata.category);
-    context.insert("site", SITE.load().as_ref());
+    context.insert("prev_post", &prev_post);
+    context.insert("next_post", &next_post);
+    if let Some(name) = src.file_stem().map(|s| s.to_string_lossy().into_owned()) {
+        let lang = page_lang(src, &rt);
+        context.insert("translations", &translations(&name, lang.as_deref()));
+    }
     let layout = metadata.layout.as_deref().unwrap_or(match rt {
-        RenderType::Post => "post.html",
+        RenderType::OriginPost | RenderType::NonOriginPost => "post.html",
         RenderType::Page => "page.html",
     });
     match TERA.load().render(layout, &context) {
@@ -205,18 +207,89 @@ async fn render_file(src: &Path, dst: &Path, rt: RenderType) -> Result<()> {
             bail!("Failed to render {}: {}", metadata.title, e);
         }
     };
-    if let RenderType::Post = rt {
+    if let RenderType::OriginPost = rt {
         render_file_class(&metadata).await?;
     }
     Ok(())
 }
 
+/// One published version of a post: the original, or a translation of it.
+#[derive(Debug, serde::Serialize)]
+struct Translation {
+    /// Language code, empty for the original post.
+    lang: String,
+    url: String,
+    current: bool,
+}
+
+/// Every version of the post named `name` that exists: the original first, then
+/// each translation in `[i18n] target_lang` order. `current` is the language of
+/// the page being rendered, `None` for the original.
+fn translations(name: &str, current: Option<&str>) -> Vec<Translation> {
+    let file = format!("{name}.md");
+    let i18n_dir = get_source_path("i18n");
+    let mut list = vec![Translation {
+        lang: String::new(),
+        url: format!("/post/{name}/"),
+        current: current.is_none(),
+    }];
+    for lang in SITE.load().get_i18n_tl() {
+        if i18n_dir.join(lang).join(&file).exists() {
+            list.push(Translation {
+                lang: lang.clone(),
+                url: format!("/post/{lang}/{name}"),
+                current: current == Some(lang.as_str()),
+            });
+        }
+    }
+    list
+}
+
+/// Context every layout starts from: the site model plus the variables the
+/// shared shell (`base.html`) may reference on any page. `translations` is
+/// empty outside post pages; `render_file` fills it in.
+fn base_context() -> TeraContext {
+    let mut context = TeraContext::new();
+    context.insert("site", SITE.load().as_ref());
+    context.insert("translations", &Vec::<Translation>::new());
+    context
+}
+
+/// Language a page is rendered in: the `i18n/<lang>/` directory name for a
+/// translation, `None` for the original post and for pages.
+fn page_lang(src: &Path, rt: &RenderType) -> Option<String> {
+    if !matches!(rt, RenderType::NonOriginPost) {
+        return None;
+    }
+    Some(src.parent()?.file_name()?.to_string_lossy().into_owned())
+}
+
+/// The posts either side of `path` in the newest-first feed: the one published
+/// earlier is the previous post, the one published later is the next.
+#[inline]
+fn neighbours<'a>(
+    ordered: &'a [Metadata],
+    path: &Path,
+) -> (Option<&'a Metadata>, Option<&'a Metadata>) {
+    let Some(index) = ordered
+        .iter()
+        .position(|post| post.path.file_stem() == path.file_stem())
+    else {
+        return (None, None);
+    };
+    let prev = ordered.get(index + 1);
+    let next = index.checked_sub(1).and_then(|i| ordered.get(i));
+    (prev, next)
+}
+
 /// Render posts to `public/post/<name>/index.html`.
 pub(crate) async fn render_post(paths: Vec<&PathBuf>) -> Result<()> {
     let pub_dir = Arc::new(get_public_path("."));
+    let ordered = Arc::new(recent_posts(SITE.load().as_ref()));
     stream::iter(paths)
         .map(|path| {
             let pub_dir = pub_dir.clone();
+            let ordered = ordered.clone();
             async move {
                 if let Some(name) = path.file_stem() {
                     let name = name.to_string_lossy().to_string();
@@ -225,7 +298,8 @@ pub(crate) async fn render_post(paths: Vec<&PathBuf>) -> Result<()> {
                         .await
                         .context(format!("Failed to create public/post/{name}/"))?;
                     let dst_file = dst_dir.join("index.html");
-                    render_file(path, &dst_file, RenderType::Post).await?;
+                    let (prev, next) = neighbours(&ordered, path);
+                    render_file(path, &dst_file, RenderType::OriginPost, prev, next).await?;
                 }
                 Ok(())
             }
@@ -251,8 +325,86 @@ pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
                         .await
                         .context(format!("Failed to create public/page/{name}/"))?;
                     let dst_file = dst_dir.join("index.html");
-                    render_file(path, &dst_file, RenderType::Page).await?;
+                    render_file(path, &dst_file, RenderType::Page, None, None).await?;
                 }
+                Ok(())
+            }
+        })
+        .buffer_unordered(get_cpu())
+        .collect::<Vec<Result<()>>>()
+        .await
+        .into_iter()
+        .collect::<Result<()>>()
+}
+
+async fn render_i18n() -> Result<()> {
+    let i18n_dir = get_source_path("i18n");
+    if !i18n_dir.exists() {
+        return Ok(());
+    }
+    let public_post_dir = get_public_path("post");
+    copy_dir_recursive(&i18n_dir, &public_post_dir)?;
+    render_i18n_md(&public_post_dir).await
+}
+
+async fn render_i18n_md(dir: &Path) -> Result<()> {
+    let mut reader = fs::read_dir(&dir)
+        .await
+        .context(format!("Failed to read dir: {}", dir.display()))?;
+    let mut list = vec![];
+    while let Some(i) = reader
+        .next_entry()
+        .await
+        .context("Failed to get next dir entry")?
+    {
+        let ip = i.path();
+        if !ip.is_dir() {
+            continue;
+        }
+        let mut sub_reader = fs::read_dir(&ip)
+            .await
+            .context(format!("Failed to read dir: {}", ip.display()))?;
+        while let Some(si) = sub_reader
+            .next_entry()
+            .await
+            .context("Failed to get next sub dir entry")?
+        {
+            let sip = si.path();
+            if sip.is_file() && sip.extension().is_some_and(|e| e.eq("md")) {
+                list.push(sip);
+            }
+        }
+    }
+
+    let ordered = Arc::new(recent_posts(SITE.load().as_ref()));
+    stream::iter(list)
+        .map(|src| {
+            let ordered = ordered.clone();
+            async move {
+                let file_stem = src
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if file_stem.is_empty() {
+                    return Ok(());
+                }
+                let dst_dir = src
+                    .parent()
+                    .map(|d| d.to_path_buf())
+                    .unwrap()
+                    .join(&file_stem);
+                if !dst_dir.exists() {
+                    fs::create_dir_all(&dst_dir)
+                        .await
+                        .context(format!("Failed to create dir: {}", dst_dir.display()))?;
+                }
+                let dst_file = dst_dir.join("index.html");
+                let (prev, next) = neighbours(&ordered, &src);
+                render_file(&src, &dst_file, RenderType::NonOriginPost, prev, next).await?;
+                fs::remove_file(&src)
+                    .await
+                    .context("Failed to clean i18n md file")?;
                 Ok(())
             }
         })
@@ -265,8 +417,7 @@ pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
 
 /// Render the tag and category index pages.
 async fn render_class() -> Result<()> {
-    let mut context = TeraContext::new();
-    context.insert("site", SITE.load().as_ref());
+    let mut context = base_context();
     context.insert("title", "Categories");
     let category_dir = get_public_path(".").join("category");
     fs::create_dir_all(&category_dir)
@@ -338,15 +489,6 @@ fn escape_xml(text: &str) -> String {
 }
 
 #[inline]
-/// Truncate to `max_chars` characters, appending `…` when shortened.
-fn truncate_chars(s: &str, max_chars: usize) -> String {
-    let mut out: String = s.chars().take(max_chars).collect();
-    if s.chars().count() > max_chars {
-        out.push('…');
-    }
-    out
-}
-
 /// Build the Atom feed for all posts.
 async fn gen_atom_str() -> String {
     let site = SITE.load();
@@ -416,7 +558,7 @@ async fn gen_atom_str() -> String {
             r#"    <link href="{root_esc}/post/{name_esc}" rel="self"/>"#
         );
 
-        let summary = truncate_chars(&content, 200);
+        let summary = truncate(&content, 200);
         let _ = writeln!(
             xml,
             "    <summary type=\"html\">{}</summary>",
@@ -507,6 +649,7 @@ pub async fn render_all() -> Result<()> {
     render_class().await?;
     render_post(site.post.iter().map(|d| &d.path).collect::<Vec<_>>()).await?;
     render_page(site.page.iter().map(|d| &d.path).collect::<Vec<_>>()).await?;
+    render_i18n().await?;
 
     gen_atom().await?;
     gen_sitemap().await?;
@@ -537,12 +680,11 @@ async fn render_home(site: &Site) -> Result<()> {
         info!("Skipping home page");
         return Ok(());
     }
-    let mut context = TeraContext::new();
+    let mut context = base_context();
     // empty values keep `{% if content %}` / `{% if title %}` blocks happy
     context.insert("content", "");
     context.insert("title", "");
     context.insert("recent_posts", &recent_posts(site));
-    context.insert("site", site);
     match tera.render("index.html", &context) {
         Ok(rendered) => {
             fs::write(get_public_path("index.html"), rendered)
@@ -568,13 +710,18 @@ fn recent_posts(site: &Site) -> Vec<Metadata> {
     posts
 }
 
-/// Parse a frontmatter date (RFC3339 format);
+/// Rank a frontmatter date (RFC3339 or the CLI `%Y-%m-%d %H:%M:%S` format);
 /// posts without a usable date sort last.
 fn date_rank(date: &str) -> DateTime<Tz> {
     let tz = SITE.load().config.zone();
     DateTime::parse_from_rfc3339(date)
         .map(|d| d.with_timezone(&tz))
         .ok()
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(date, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|d| d.and_utc().with_timezone(&tz))
+        })
         .unwrap_or(DateTime::<Tz>::MIN_UTC.with_timezone(&tz))
 }
 
@@ -610,6 +757,45 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Posts named `a`..`d`, newest first, as `recent_posts` would return them.
+    fn ordered_posts() -> Vec<Metadata> {
+        ["d", "c", "b", "a"]
+            .iter()
+            .map(|name| Metadata {
+                path: PathBuf::from(format!("source/post/{name}.md")),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn neighbours_link_older_as_previous_and_newer_as_next() {
+        let posts = ordered_posts();
+        let (prev, next) = neighbours(&posts, Path::new("source/post/b.md"));
+        assert_eq!(prev.unwrap().path, Path::new("source/post/a.md"));
+        assert_eq!(next.unwrap().path, Path::new("source/post/c.md"));
+    }
+
+    #[test]
+    fn neighbours_are_absent_at_both_ends() {
+        let posts = ordered_posts();
+        let (prev, next) = neighbours(&posts, Path::new("source/post/d.md"));
+        assert_eq!(prev.unwrap().path, Path::new("source/post/c.md"));
+        assert!(next.is_none());
+
+        let (prev, next) = neighbours(&posts, Path::new("source/post/a.md"));
+        assert!(prev.is_none());
+        assert_eq!(next.unwrap().path, Path::new("source/post/b.md"));
+    }
+
+    #[test]
+    fn neighbours_are_absent_for_unknown_paths() {
+        let posts = ordered_posts();
+        let (prev, next) = neighbours(&posts, Path::new("source/post/missing.md"));
+        assert!(prev.is_none());
+        assert!(next.is_none());
+    }
 
     #[test]
     fn render_adds_heading_anchors_matching_toc_slugs() {

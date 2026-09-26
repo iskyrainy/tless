@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use actix_cors::Cors;
 use actix_web::{App, HttpResponse, HttpServer, Responder, get, web};
 use anyhow::{Context, Result};
 use tokio::{fs, select};
@@ -32,19 +33,24 @@ fn init_server(
     port: u16,
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
 ) -> Result<actix_web::dev::Server> {
-    let server = HttpServer::new(|| App::new().service(hi).service(get_static_files))
-        .shutdown_signal(async move {
-            // Wait ctrl_c for quit gracefully
-            tokio::signal::ctrl_c()
-                .await
-                .expect("Failed to listen for ctrl_c");
-            let _ = shutdown_tx.send(());
-            info!("Received exit signal, shutting down...");
-        })
-        .shutdown_timeout(60)
-        .bind(("0.0.0.0", port))
-        .context(format!("Failed to bind port: {port}"))?
-        .run();
+    let server = HttpServer::new(|| {
+        let cors = Cors::default()
+            .allowed_origin("https://giscus.app")
+            .allowed_methods(vec!["GET"]);
+        App::new().wrap(cors).service(hi).service(get_static_files)
+    })
+    .shutdown_signal(async move {
+        // Wait ctrl_c for quit gracefully
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for ctrl_c");
+        let _ = shutdown_tx.send(());
+        info!("Received exit signal, shutting down...");
+    })
+    .shutdown_timeout(60)
+    .bind(("0.0.0.0", port))
+    .context(format!("Failed to bind port: {port}"))?
+    .run();
     Ok(server)
 }
 

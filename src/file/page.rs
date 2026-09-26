@@ -26,7 +26,7 @@ impl Page {
         let file_path = Self::validate_and_get_path(name)?;
         fs::write(&file_path, Self::base_page_text(name))
             .context(format!("Failed to write new page: {}", file_path.display()))?;
-        info!("Page '{}' created", file_path.display());
+        info!("Page '{name}' created");
         Ok(())
     }
 
@@ -41,14 +41,10 @@ impl Page {
 
     /// Remove an existing page file.
     pub fn remove(name: &str) -> Result<()> {
-        let slug = Self::validate_name(name)?;
-        let file_path = get_path(&slug, "page");
-        if !file_path.exists() {
-            bail!("Page does not exist.");
-        }
+        let file_path = Self::validate_and_get_path(name)?;
         fs::remove_file(&file_path)
             .context(format!("Failed to remove page/: {}", file_path.display()))?;
-        info!("Page '{}' removed", name);
+        info!("Page '{name}' removed");
         Ok(())
     }
 }

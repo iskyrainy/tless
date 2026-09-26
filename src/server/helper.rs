@@ -1,5 +1,6 @@
 //! Built-in Tera template functions and Rhai helper loading.
 
+use std::path::PathBuf;
 use std::{fmt::Write, fs, path::Path, sync::Arc};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -111,7 +112,15 @@ fn build_tag(
         for (k, v) in attrs {
             let _ = write!(html, r#" {k}="{v}""#);
         }
-        for (k, v) in map {
+        // `Map` iteration order is not stable, so sort the attributes to keep
+        // the generated HTML reproducible across builds.
+        let mut entries: Vec<_> = map.iter().collect();
+        entries.sort_by(|(a, _), (b, _)| {
+            a.as_str()
+                .unwrap_or_default()
+                .cmp(b.as_str().unwrap_or_default())
+        });
+        for (k, v) in entries {
             let s = v.as_str().ok_or_else(|| {
                 Error::message(format!(
                     "Invalid type for key {}",
@@ -144,14 +153,23 @@ fn build_tag(
 }
 
 /// Build an HTML tag (`css`, `js`, `link`, ...) for a path or a map of attributes.
+///
+/// `close_empty` forces a closing tag when no `text` is given. Non-void
+/// elements need it: an external `<script src="…">` left unclosed swallows the
+/// rest of the document.
 fn tag_call(
     kwargs: Kwargs,
     tag: &str,
     path_attr: &str,
     attrs: &[(&str, &str)],
+    close_empty: bool,
 ) -> TeraResult<Value> {
     let path = kwargs.must_get::<Value>("path")?;
-    let text = kwargs.get("text")?;
+    let text = match kwargs.get::<String>("text")? {
+        None if close_empty => Some(String::new()),
+        text => text,
+    };
+    let text = text.as_deref();
     let html = match path.as_array() {
         Some(paths) => paths
             .iter()
@@ -167,56 +185,60 @@ fn register_tag_helpers(tera: &mut Tera) {
     tera.register_function(
         "css",
         |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
-            tag_call(kwargs, "link", "href", &[("rel", "stylesheet")])
+            tag_call(kwargs, "link", "href", &[("rel", "stylesheet")], false)
         },
     );
     tera.register_function(
         "js",
         |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
-            tag_call(kwargs, "script", "src", &[])
+            tag_call(kwargs, "script", "src", &[], true)
         },
     );
     tera.register_function(
         "link",
         |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
-            tag_call(kwargs, "a", "href", &[])
+            tag_call(kwargs, "a", "href", &[], false)
         },
     );
     tera.register_function(
         "image",
         |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
-            tag_call(kwargs, "img", "src", &[])
+            tag_call(kwargs, "img", "src", &[], false)
         },
     );
     tera.register_function(
         "mail",
         |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
-            tag_call(kwargs, "a", "href", &[])
+            tag_call(kwargs, "a", "href", &[], false)
         },
     );
     tera.register_function(
         "favicon",
         |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
-            tag_call(kwargs, "link", "href", &[("rel", "icon")])
+            tag_call(kwargs, "link", "href", &[("rel", "icon")], false)
         },
     );
-    tera.register_function(
-        "feed",
-        |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
-            tag_call(
-                kwargs,
-                "link",
-                "href",
-                &[("rel", "alternate"), ("type", "application/rss+xml")],
-            )
-        },
-    );
+    tera.register_function("feed", feed_helper);
     tera.register_function(
         "meta",
         |kwargs: Kwargs, _state: &State| -> TeraResult<Value> {
-            tag_call(kwargs, "meta", "content", &[("name", "generator")])
+            tag_call(kwargs, "meta", "content", &[("name", "generator")], false)
         },
     );
+}
+
+/// Feed discovery link. `type` defaults to RSS; pass `title` to label the feed
+/// in the reader's subscription list.
+fn feed_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
+    let kind = kwargs
+        .get::<String>("type")?
+        .unwrap_or_else(|| "application/rss+xml".to_string());
+    let title = kwargs.get::<String>("title")?;
+    let mut attrs = vec![("rel", "alternate"), ("type", kind.as_str())];
+    if let Some(title) = title.as_deref() {
+        attrs.push(("title", title));
+    }
+    tag_call(kwargs, "link", "href", &attrs, false)
 }
 
 fn url_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
@@ -554,6 +576,7 @@ fn open_graph_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
 fn toc_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
     let content = kwargs.must_get::<String>("content")?;
     let max_level = kwargs.get::<usize>("max_level")?.unwrap_or(6);
+    let min_level = kwargs.get::<usize>("min_level")?.unwrap_or(1);
 
     let mut items = Vec::new();
     let mut current_level = None;
@@ -572,7 +595,7 @@ fn toc_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
             }
             Event::End(TagEnd::Heading(..)) => {
                 if let Some(level) = current_level.take()
-                    && level <= max_level
+                    && (min_level..=max_level).contains(&level)
                     && !current_text.trim().is_empty()
                 {
                     let text = current_text.trim().to_string();
@@ -644,7 +667,19 @@ fn level_to_usize(level: HeadingLevel) -> usize {
 /// Template `slugify()`; see [crate::util::slugify] for the algorithm.
 fn to_slug(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
     let input = kwargs.must_get::<String>("str")?;
-    Ok(Value::normal_string(&slugify(input.as_str())))
+    let p_flag = kwargs.get::<bool>("is_path")?.unwrap_or(false);
+    if p_flag {
+        let path = PathBuf::from(input);
+        Ok(Value::normal_string(&slugify(
+            path.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+                .as_str(),
+        )))
+    } else {
+        Ok(Value::normal_string(&slugify(input.as_str())))
+    }
 }
 
 fn escape_html_attr(input: &str) -> String {
@@ -918,9 +953,10 @@ mod tests {
             render(r#"{{ css(path="/style.css") }}"#),
             r#"<link rel="stylesheet" href="/style.css">"#
         );
+        // an external script must be closed, or it swallows the rest of the page
         assert_eq!(
             render(r#"{{ js(path="app.js") }}"#),
-            r#"<script src="/app.js">"#
+            r#"<script src="/app.js"></script>"#
         );
         assert_eq!(
             render(r#"{{ favicon(path="/favicon.ico") }}"#),
@@ -929,6 +965,10 @@ mod tests {
         assert_eq!(
             render(r#"{{ feed(path="/rss.xml") }}"#),
             r#"<link rel="alternate" type="application/rss+xml" href="/rss.xml">"#
+        );
+        assert_eq!(
+            render(r#"{{ feed(path="/atom.xml", type="application/atom+xml", title="My Blog") }}"#),
+            r#"<link rel="alternate" type="application/atom+xml" title="My Blog" href="/atom.xml">"#
         );
         assert_eq!(
             render(r#"{{ meta(path="generator") }}"#),
@@ -1016,6 +1056,14 @@ mod tests {
     }
 
     #[test]
+    fn toc_helper_respects_min_level() {
+        assert_eq!(
+            render(r#"{{ toc(content='# One\n\n## Two', min_level=2) }}"#),
+            r##"<nav class="toc" aria-label="Table of contents"><ul><li class="toc-level-2"><a href="#two">Two</a></li></ul></nav>"##
+        );
+    }
+
+    #[test]
     fn toc_helper_respects_max_level() {
         assert_eq!(
             render(r#"{{ toc(content='# One\n\n## Two', max_level=1) }}"#),
@@ -1076,6 +1124,25 @@ mod tests {
     fn escape_helpers_encode_html_specials() {
         assert_eq!(escape_html_attr("a&b\"c<d>e"), "a&amp;b&quot;c&lt;d&gt;e");
         assert_eq!(escape_html_text("a&b<c>"), "a&amp;b&lt;c&gt;");
+    }
+
+    #[test]
+    fn tag_helpers_render_map_attributes_in_a_stable_order() {
+        // `Map` iteration order is not stable, so the same call must still
+        // produce identical HTML on every render.
+        let template =
+            r#"{{ link(path={"href": "/b", "class": "x", "aria-label": "y"}, text="t") }}"#;
+        let expected = r#"<a aria-label="y" class="x" href="/b">t</a>"#;
+        assert_eq!(render(template), expected);
+        assert_eq!(render(template), expected);
+    }
+
+    #[test]
+    fn js_helper_accepts_extra_attributes() {
+        assert_eq!(
+            render(r#"{{ js(path={"src": "/a.js", "defer": ""}) }}"#),
+            r#"<script defer="" src="/a.js"></script>"#
+        );
     }
 
     #[test]

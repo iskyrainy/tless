@@ -9,8 +9,9 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use arc_swap::ArcSwap;
+use chrono_tz::Tz;
 use notify::EventKind;
 use notify_debouncer_full::{DebouncedEvent, new_debouncer};
 use serde::{Deserialize, Serialize};
@@ -19,18 +20,19 @@ use tokio::{join, select, sync::mpsc};
 use tracing::{error, info};
 
 use crate::{
-    BASE_DIR, config,
-    config::SiteConfig,
-    error,
+    BASE_DIR, error,
     file::{Metadata, parse_file},
 };
 
 mod helper;
+mod i18n;
 mod render;
 mod run;
 mod site;
 mod template;
 
+pub use i18n::Language;
+pub use i18n::translate;
 pub use render::render_all;
 pub use run::run;
 pub use site::init;
@@ -41,6 +43,7 @@ pub use site::init;
 /// * `page` - List of all page metadata.
 /// * `category` - Map of all categories.
 /// * `tag` - Map of all tags.
+/// * `config` - Config loaded from `tless.toml`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct Site {
     pub post: Vec<Metadata>,
@@ -48,6 +51,8 @@ pub(crate) struct Site {
     pub category: HashMap<String, ClassMap>,
     pub tag: HashMap<String, ClassMap>,
     pub config: SiteConfig,
+    i18n: I18nConfig,
+    giscus: GiscusConfig,
 }
 
 impl Site {
@@ -58,7 +63,13 @@ impl Site {
             category: HashMap::new(),
             tag: HashMap::new(),
             config: SiteConfig::default(),
+            i18n: I18nConfig::default(),
+            giscus: GiscusConfig::default(),
         }
+    }
+
+    pub fn get_i18n_tl(&self) -> &Vec<String> {
+        &self.i18n.target_lang
     }
 }
 
@@ -72,14 +83,103 @@ pub(crate) struct ClassMap {
     pub posts: Vec<Metadata>,
 }
 
+/// Configuration structure for the application.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct Config {
+    pub site: SiteConfig,
+    pub i18n: Option<I18nConfig>,
+    pub giscus: Option<GiscusConfig>,
+}
+
+/// `[giscus]` configuration for post comments.
+/// # Fields
+/// * `repo` - GitHub repository holding the discussions, `owner/name`.
+/// * `repo_id` - The repository's node id, from https://giscus.app.
+/// * `category` - Discussion category the comments are filed under.
+/// * `category_id` - The category's node id.
+/// * `mapping` - How a page maps to a discussion, e.g. `pathname`.
+/// * `lang` - Language of the giscus interface.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub(crate) struct GiscusConfig {
+    pub repo: String,
+    pub repo_id: String,
+    pub category: String,
+    pub category_id: String,
+    pub mapping: String,
+    pub lang: String,
+}
+
+/// Part of `[site]` configuration details.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub(crate) struct SiteConfig {
+    pub title: String,
+    pub subtitle: String,
+    pub description: String,
+    pub rights: String,
+    pub author: String,
+    pub url: String,
+    pub zone: String,
+    pub theme: String,
+    pub favicon: String,
+    pub menu: Vec<Menu>,
+}
+
+impl SiteConfig {
+    /// Timezone configured in `[site] zone`, falling back to UTC.
+    #[inline]
+    pub(crate) fn zone(&self) -> Tz {
+        self.zone.trim().parse().unwrap_or(Tz::UTC)
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct I18nConfig {
+    pub provider: String,
+    pub api_key: String,
+    pub model: String,
+    pub target_lang: Vec<String>,
+}
+
+/// Menu item structure for site navigation.
+/// # Fields
+/// * `name` - The display name of the menu item.
+/// * `link` - The URL or path the menu item points to.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct Menu {
+    pub name: String,
+    pub link: String,
+}
+
+/// Path to the configuration file (`tless.toml`).
+#[inline]
+fn config_path() -> PathBuf {
+    BASE_DIR.join("tless.toml")
+}
+
+/// Load `tless.toml` from the working directory.
+pub(crate) fn load() -> Result<Config> {
+    let path = config_path();
+    if !path.exists() {
+        bail!("Configuration file not found at {}", path.display());
+    }
+    let text = fs::read_to_string(path)?;
+    Ok(toml::from_str(&text)?)
+}
+
+/// Timezone of the configured site, falling back to UTC.
+pub(crate) fn zone() -> Tz {
+    let site = SITE.load();
+    site.config.zone()
+}
+
 /// Get the path to the source dir (`./source`) in the current directory.
 #[inline]
 pub(crate) fn get_source_path<'a, S: Into<&'a str>>(name: S) -> PathBuf {
     BASE_DIR.join("source").join(name.into())
 }
 
-#[inline]
 /// Path part of a site URL, e.g. `/blog` for `https://example.com/blog`.
+#[inline]
 pub(crate) fn extract_root_path(url: &str) -> String {
     if url.is_empty() {
         return String::new();
@@ -97,8 +197,12 @@ fn get_site() -> Site {
     let post_dir = get_source_path("post");
     let page_dir = get_source_path("page");
     let mut site = Site::new();
-    site.config = match config::load() {
-        Ok(config) => config.site,
+    (site.config, site.i18n, site.giscus) = match load() {
+        Ok(config) => (
+            config.site,
+            config.i18n.unwrap_or_default(),
+            config.giscus.unwrap_or_default(),
+        ),
         Err(e) => error::fatal(format!("{e:#}")),
     };
 

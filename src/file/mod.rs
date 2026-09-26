@@ -7,15 +7,21 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
+use chrono::{Local, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::{BASE_DIR, config, util::slugify};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
+use crate::{
+    BASE_DIR,
+    server::zone,
+    util::{slugify, truncate},
+};
 
 mod blog;
 mod page;
 
-pub use blog::Blog;
+pub use blog::Post;
 pub use page::Page;
 
 /// Metadata parsed from a source file's frontmatter.
@@ -27,6 +33,8 @@ pub struct Metadata {
     pub tag: Option<Vec<String>>,
     pub category: Option<Vec<String>>,
     pub path: PathBuf,
+    /// First paragraph of the body as plain text; filled by [parse_file].
+    pub excerpt: String,
 }
 
 /// Path to a source file (`source/<class>/<name>.md`).
@@ -42,7 +50,7 @@ pub(crate) fn get_path(name: &str, class: &str) -> PathBuf {
 /// Current timestamp formatted in the configured `[site] zone`, falling back to UTC.
 #[inline]
 pub(crate) fn current_timestamp() -> String {
-    Utc::now().with_timezone(&config::zone()).to_rfc3339()
+    Utc::now().with_timezone(&zone()).to_rfc3339()
 }
 
 /// Parse a source file into [Metadata] and its markdown body (frontmatter
@@ -65,14 +73,12 @@ pub fn parse_file(path: &Path) -> Result<(Metadata, String)> {
     if let Some(title) = frontmatter.get("title").and_then(|v| v.as_str()) {
         metadata.title = title.to_string();
     } else {
-        metadata.title = path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
+        metadata.title = String::new();
     }
     if let Some(date) = frontmatter.get("date").and_then(|v| v.as_str()) {
         metadata.date = date.to_string();
+    } else {
+        metadata.date = Local::now().to_rfc3339().to_string();
     }
     if let Some(layout) = frontmatter.get("layout").and_then(|v| v.as_str()) {
         metadata.layout = Some(layout.to_string());
@@ -83,6 +89,8 @@ pub fn parse_file(path: &Path) -> Result<(Metadata, String)> {
             .filter_map(|t| t.as_str().map(|s| s.to_string()))
             .collect();
         metadata.tag = Some(tag_list);
+    } else if let Some(t) = frontmatter.get("tag").and_then(|v| v.as_str()) {
+        metadata.tag = Some(vec![t.to_string()]);
     }
     if let Some(category) = frontmatter.get("category").and_then(|v| v.as_array()) {
         let category_list = category
@@ -90,8 +98,60 @@ pub fn parse_file(path: &Path) -> Result<(Metadata, String)> {
             .filter_map(|c| c.as_str().map(|s| s.to_string()))
             .collect();
         metadata.category = Some(category_list);
+    } else if let Some(c) = frontmatter.get("category").and_then(|v| v.as_str()) {
+        metadata.category = Some(vec![c.to_string()]);
     }
+    metadata.excerpt = excerpt(md_body);
     Ok((metadata, md_body.to_string()))
+}
+
+/// First real paragraph of a markdown body as plain text, for post listings.
+/// Skips headings, code blocks, tables and images; links keep their text.
+fn excerpt(body: &str) -> String {
+    let parser = Parser::new(body);
+
+    let mut text = String::new();
+    let mut in_paragraph = false;
+    let mut skip_depth = 0usize;
+    let mut in_image = 0usize;
+
+    for event in parser {
+        match event {
+            Event::Start(Tag::Heading { .. })
+            | Event::Start(Tag::CodeBlock(_))
+            | Event::Start(Tag::Table(_)) => {
+                skip_depth += 1;
+            }
+            Event::End(TagEnd::Heading(_))
+            | Event::End(TagEnd::CodeBlock)
+            | Event::End(TagEnd::Table) => {
+                skip_depth = skip_depth.saturating_sub(1);
+            }
+            Event::Start(Tag::Image { .. }) => in_image += 1,
+            Event::End(TagEnd::Image) => in_image = in_image.saturating_sub(1),
+            Event::Start(Tag::Paragraph) => in_paragraph = true,
+            Event::Text(t) | Event::Code(t) if in_paragraph && skip_depth == 0 && in_image == 0 => {
+                let cleaned: String = t.split_whitespace().collect::<Vec<_>>().join(" ");
+                if cleaned.is_empty() {
+                    continue;
+                }
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                text.push_str(&cleaned);
+            }
+            Event::End(TagEnd::Paragraph) if in_paragraph => {
+                in_paragraph = false;
+                let text = text.trim();
+                if skip_depth == 0 && !text.is_empty() {
+                    return truncate(text, 160);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    String::new()
 }
 
 /// A source entity (blog, page, ...) addressed by a user-supplied name.
@@ -112,5 +172,36 @@ pub(crate) trait ValidEntity {
             bail!("Invalid characters in name");
         }
         Ok(slug)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::excerpt;
+
+    #[test]
+    fn excerpt_skips_headings_and_code() {
+        let body =
+            "# Title\n\n## Section\n\n```rust\nfn main() {}\n```\n\nThe real first paragraph.";
+        assert_eq!(excerpt(body), "The real first paragraph.");
+    }
+
+    #[test]
+    fn excerpt_keeps_link_text_and_drops_images() {
+        let body = "![cover](/img.png)\n\nRead the [announcement](/post/x) for details.";
+        assert_eq!(excerpt(body), "Read the announcement for details.");
+    }
+
+    #[test]
+    fn excerpt_truncates_long_paragraphs() {
+        let body = "word ".repeat(60);
+        let excerpt = excerpt(&body);
+        assert!(excerpt.ends_with('…'));
+        assert_eq!(excerpt.chars().count(), 161);
+    }
+
+    #[test]
+    fn excerpt_is_empty_for_heading_only_bodies() {
+        assert_eq!(excerpt("## Only headings\n\n### Nothing else"), "");
     }
 }

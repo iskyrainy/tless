@@ -1,46 +1,117 @@
-/* Code block syntax highlighting (highlight.js token classes).
-   Code blocks keep a dark background in both themes, so tokens use a
-   single palette. See base.html for the highlighter script. */
-.hljs {
-    color: #e8e8e8;
-    background: transparent;
+/* Code highlighting (highlight.js classes).
+   Palette: Tokyo Night (dark) and Tokyo Night Day (light)*/
+
+:root {
+    /* Tokyo Night Day */
+    --hl-fg: #3760bf;
+    --hl-comment: #848cb5;
+    --hl-keyword: #9854f1;
+    --hl-string: #587539;
+    --hl-number: #b15c00;
+    --hl-function: #2e7de9;
+    --hl-attr: #387068;
+    --hl-meta: #118c74;
+    --hl-type: #188092;
+    --hl-deleted: #c64343;
 }
 
-.hljs-comment, .hljs-quote {
-    color: #7f848e;
+html[data-theme="dark"] {
+    /* Tokyo Night */
+    --hl-fg: #c0caf5;
+    --hl-comment: #565f89;
+    --hl-keyword: #bb9af7;
+    --hl-string: #9ece6a;
+    --hl-number: #ff9e64;
+    --hl-function: #7aa2f7;
+    --hl-attr: #73daca;
+    --hl-meta: #1abc9c;
+    --hl-type: #2ac3de;
+    --hl-deleted: #db4b4b;
+}
+
+/* System dark, no explicit choice */
+@media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) {
+        --hl-fg: #c0caf5;
+        --hl-comment: #565f89;
+        --hl-keyword: #bb9af7;
+        --hl-string: #9ece6a;
+        --hl-number: #ff9e64;
+        --hl-function: #7aa2f7;
+        --hl-attr: #73daca;
+        --hl-meta: #1abc9c;
+        --hl-type: #2ac3de;
+        --hl-deleted: #db4b4b;
+    }
+}
+
+.hljs {
+    background: transparent;
+    color: var(--hl-fg);
+}
+
+.hljs-comment,
+.hljs-quote {
+    color: var(--hl-comment);
     font-style: italic;
 }
 
-.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag, .hljs-type {
-    color: #c678dd;
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag {
+    color: var(--hl-keyword);
 }
 
-.hljs-string, .hljs-regexp, .hljs-addition, .hljs-attribute {
-    color: #98c379;
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-meta .hljs-string {
+    color: var(--hl-string);
 }
 
-.hljs-number, .hljs-built_in, .hljs-symbol, .hljs-bullet, .hljs-meta .hljs-keyword {
-    color: #d19a66;
+.hljs-number,
+.hljs-built_in,
+.hljs-symbol,
+.hljs-bullet {
+    color: var(--hl-number);
 }
 
-.hljs-title, .hljs-title.function_, .hljs-title.class_, .hljs-section, .hljs-selector-id {
-    color: #61afef;
+.hljs-title,
+.hljs-title.function_,
+.hljs-title.class_,
+.hljs-section,
+.hljs-selector-id {
+    color: var(--hl-function);
 }
 
-.hljs-attr, .hljs-variable, .hljs-template-variable, .hljs-selector-class {
-    color: #e06c75;
+.hljs-name,
+.hljs-tag,
+.hljs-selector-class,
+.hljs-selector-pseudo {
+    color: var(--hl-function);
 }
 
-.hljs-tag, .hljs-name, .hljs-selector-pseudo {
-    color: #e06c75;
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable {
+    color: var(--hl-attr);
 }
 
-.hljs-meta, .hljs-link {
-    color: #56b6c2;
+.hljs-meta,
+.hljs-link {
+    color: var(--hl-meta);
+}
+
+.hljs-type,
+.hljs-params,
+.hljs-property {
+    color: var(--hl-type);
 }
 
 .hljs-deletion {
-    color: #e06c75;
+    color: var(--hl-deleted);
 }
 
 .hljs-emphasis {
@@ -48,5 +119,5 @@
 }
 
 .hljs-strong {
-    font-weight: 700;
+    font-weight: 600;
 }
