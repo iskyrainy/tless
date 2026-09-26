@@ -231,7 +231,7 @@ async fn translate_tls(
 
                 let md_str = fs::read_to_string(&d.path).await.context(format!(
                     "Failed to read origin markdown: {}",
-                    &d.path.display()
+                    d.path.display()
                 ))?;
                 let new = compute_md5(&md_str);
                 let name_key = name.to_string();
@@ -252,7 +252,7 @@ async fn translate_tls(
                     let dst_file = dst_dir.join(name);
                     let mut file = File::create(&dst_file).await.context(format!(
                         "Failed to create translated markdown: {}",
-                        &dst_file.display()
+                        dst_file.display()
                     ))?;
 
                     let target_str = p.translate(&md_str, target_lang).await?;
@@ -260,11 +260,11 @@ async fn translate_tls(
                         .await
                         .context(format!(
                             "Failed to write translated markdown: {}",
-                            &dst_file.display()
+                            dst_file.display()
                         ))?;
                     file.flush().await.context(format!(
                         "Failed to flush translated markdown: {}",
-                        &dst_file.display()
+                        dst_file.display()
                     ))?;
                 }
                 info!("Translate {name} finished");
