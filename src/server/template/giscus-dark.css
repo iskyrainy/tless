@@ -1,0 +1,180 @@
+/*! giscus theme — dark, matching the base theme.
+ *
+ * The dark counterpart of giscus.css: same rules, dark palette. The page
+ * background is #151414, so every panel and border is lifted well clear of it
+ * instead of sitting a few values away. */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
+main {
+    /* Syntax colours for code in comments (Tokyo Night) */
+    --color-prettylights-syntax-comment: #565f89;
+    --color-prettylights-syntax-constant: #ff9e64;
+    --color-prettylights-syntax-entity: #9d7cd8;
+    --color-prettylights-syntax-storage-modifier-import: #c0caf5;
+    --color-prettylights-syntax-entity-tag: #7aa2f7;
+    --color-prettylights-syntax-keyword: #bb9af7;
+    --color-prettylights-syntax-string: #9ece6a;
+    --color-prettylights-syntax-variable: #ff9e64;
+    --color-prettylights-syntax-brackethighlighter-unmatched: #db4b4b;
+    --color-prettylights-syntax-invalid-illegal-text: #151414;
+    --color-prettylights-syntax-invalid-illegal-bg: #db4b4b;
+    --color-prettylights-syntax-carriage-return-text: #151414;
+    --color-prettylights-syntax-carriage-return-bg: #db4b4b;
+    --color-prettylights-syntax-string-regexp: #9ece6a;
+    --color-prettylights-syntax-markup-list: #e0af68;
+    --color-prettylights-syntax-markup-heading: #7aa2f7;
+    --color-prettylights-syntax-markup-italic: #f0e3de;
+    --color-prettylights-syntax-markup-bold: #e8e0db;
+    --color-prettylights-syntax-markup-deleted-text: #db4b4b;
+    --color-prettylights-syntax-markup-deleted-bg: rgba(219, 75, 75, 0.15);
+    --color-prettylights-syntax-markup-inserted-text: #9ece6a;
+    --color-prettylights-syntax-markup-inserted-bg: rgba(158, 206, 106, 0.15);
+    --color-prettylights-syntax-markup-changed-text: #ff9e64;
+    --color-prettylights-syntax-markup-changed-bg: rgba(255, 158, 100, 0.15);
+    --color-prettylights-syntax-markup-ignored-text: #c0caf5;
+    --color-prettylights-syntax-markup-ignored-bg: rgba(122, 162, 247, 0.15);
+    --color-prettylights-syntax-meta-diff-range: #9d7cd8;
+    --color-prettylights-syntax-brackethighlighter-angle: #565f89;
+    --color-prettylights-syntax-sublimelinter-gutter-mark: #3d3d3d;
+    --color-prettylights-syntax-constant-other-reference-link: #7aa2f7;
+
+    /* Surfaces: every panel is lifted off #151414 so it reads as a surface. */
+    --color-canvas-default: #151414;
+    --color-canvas-overlay: #201f1f;
+    --color-canvas-inset: #262525;
+    --color-canvas-subtle: #201f1f;
+    --color-border-default: #4a4949;
+    --color-border-muted: #333232;
+    --color-neutral-muted: rgba(255, 255, 255, 0.08);
+
+    /* Text */
+    --color-fg-default: #f0e3de;
+    --color-fg-muted: #a8a19e;
+    --color-fg-subtle: #a8a19e;
+
+    /* Accent: the site's, so links in comments match links in the article.
+       The primary button fill is a brighter step of it so the control reads as
+       a solid button on #151414. */
+    --color-accent-fg: #d63c01;
+    --color-accent-emphasis: #d63c01;
+    --color-accent-muted: rgba(214, 60, 1, 0.4);
+    --color-accent-subtle: rgba(214, 60, 1, 0.15);
+
+    /* Buttons */
+    --color-btn-text: #f0e3de;
+    --color-btn-bg: #262525;
+    --color-btn-border: #4a4949;
+    --color-btn-shadow: 0 0 transparent;
+    --color-btn-inset-shadow: 0 0 transparent;
+    --color-btn-hover-bg: #302f2f;
+    --color-btn-hover-border: #575656;
+    --color-btn-active-bg: #383737;
+    --color-btn-active-border: #6a6969;
+    --color-btn-selected-bg: #383737;
+    --color-btn-primary-text: #fff;
+    --color-btn-primary-bg: #e8480a;
+    --color-btn-primary-border: #e8480a;
+    --color-btn-primary-shadow: 0 0 transparent;
+    --color-btn-primary-inset-shadow: 0 0 transparent;
+    --color-btn-primary-hover-bg: #ff5e1f;
+    --color-btn-primary-hover-border: #ff5e1f;
+    --color-btn-primary-selected-bg: #ff5e1f;
+    --color-btn-primary-selected-shadow: 0 0 transparent;
+    --color-btn-primary-disabled-text: rgba(255, 255, 255, 0.8);
+    --color-btn-primary-disabled-bg: rgba(232, 72, 10, 0.6);
+    --color-btn-primary-disabled-border: rgba(232, 72, 10, 0.6);
+
+    --color-action-list-item-default-hover-bg: rgba(255, 255, 255, 0.07);
+    --color-segmented-control-bg: rgba(255, 255, 255, 0.09);
+    --color-segmented-control-button-bg: #201f1f;
+    --color-segmented-control-button-selected-border: #4a4949;
+
+    --color-success-fg: #9ece6a;
+    --color-attention-fg: #e0af68;
+    --color-attention-muted: rgba(224, 175, 104, 0.4);
+    --color-attention-subtle: rgba(224, 175, 104, 0.15);
+    --color-danger-fg: #ff6b6b;
+    --color-danger-muted: rgba(255, 107, 107, 0.4);
+    --color-danger-subtle: rgba(255, 107, 107, 0.15);
+
+    --color-primer-shadow-inset: inset 0 1px 0 rgba(0, 0, 0, 0.3);
+    --color-scale-gray-7: #302f2f;
+    --color-scale-blue-8: rgba(255, 122, 69, 0.25);
+    --color-social-reaction-bg-hover: var(--color-scale-gray-7);
+    --color-social-reaction-bg-reacted-hover: var(--color-scale-blue-8);
+}
+
+/*! Type stack from style.css */
+main {
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        Helvetica, Arial, sans-serif;
+}
+
+main .gsc-comment-box-textarea,
+main .gsc-comment-content,
+main .gsc-reply-content,
+main .markdown {
+    font-family: inherit;
+    line-height: 1.75;
+}
+
+main .markdown pre,
+main .markdown pre > code,
+main .markdown code:not(pre > code) {
+    font-family: "Source Code Pro", "Ubuntu Mono", "DejaVu Sans Mono", Consolas,
+        Menlo, monospace;
+}
+
+/*! The same dashed hairlines that frame the regions of the page */
+main .gsc-comment-box:not(.gsc-comment-box-is-reply) {
+    border: 1px dashed var(--color-border-default);
+    border-radius: 6px;
+}
+
+main .gsc-comment-box-textarea {
+    border-radius: 6px 6px 0 0;
+}
+
+main .gsc-comment-box-tabs,
+main .gsc-comment-box-bottom,
+main .gsc-replies,
+main .gsc-reply-box {
+    border-top-style: dashed;
+}
+
+main .gsc-comment-box-tabs {
+    border-bottom-style: dashed;
+}
+
+/* Each comment is its own framed block, like the entries in the feed. */
+main .gsc-timeline > .gsc-comment:not(:first-child) {
+    border-top: 1px dashed var(--color-border-default);
+    padding-top: 16px;
+}
+
+/* The thread line beside replies becomes the theme's hairline. */
+main .gsc-tl-line {
+    width: 1px;
+    background-color: transparent;
+    background-image: repeating-linear-gradient(
+        to bottom,
+        var(--color-border-default) 0 4px,
+        transparent 4px 8px
+    );
+}
+
+main .gsc-comment-box-write,
+main .gsc-comment-box-preview {
+    border-radius: 6px;
+}
+
+main .gsc-pagination-button:hover {
+    border-color: var(--color-accent-emphasis);
+    color: var(--color-accent-emphasis);
+}
+
+/* GitHub's loader is a dark-on-light gif; keep it legible on the dark panel. */
+main .gsc-loading-image {
+    filter: invert(1) hue-rotate(180deg);
+}

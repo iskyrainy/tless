@@ -996,6 +996,34 @@ html[data-theme="dark"] .icon-sun {
     line-height: 1.35;
 }
 
+/* Comments (giscus). The region is framed like the rest of the page, but its
+   content stays on the article column. */
+.comments {
+    max-width: var(--container);
+    margin: 0 auto;
+    padding: var(--inset) var(--inset) 8px;
+    background-image: var(--dash-x);
+    background-position: 0 0;
+    background-size: 100% 1px;
+    background-repeat: no-repeat;
+}
+
+.comments-inner {
+    max-width: var(--page-width);
+    margin: 0 auto;
+}
+
+.giscus,
+.giscus-frame {
+    width: 100%;
+    margin: 0;
+    border: 0;
+}
+
+.giscus {
+    min-height: 180px;
+}
+
 /* Footer */
 .site-footer {
     position: relative;

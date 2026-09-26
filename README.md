@@ -65,7 +65,7 @@ source/
   robots.txt
 theme/base/
   layout/                      # base.html, index.html, post.html, page.html, tag*.html, category*.html
-  assets/                      # style.css, highlight.css, highlight.js
+  assets/                      # style.css, highlight.css, highlight.js, giscus*.css
 ```
 
 Names are slugified (`First Post` -> `first-post.md`), and every source file is rendered to a
@@ -95,6 +95,14 @@ provider = "deepseek"          # deepseek | kimi | glm
 api_key = "..."
 model = "deepseek-flash"
 target_lang = ["zh-CN", "en"]
+
+[giscus]                       # optional; see "Comments" below
+repo = "owner/name"
+repo_id = "R_kgDO…"
+category = "Announcements"
+category_id = "DIC_kwDO…"
+mapping = "pathname"
+lang = "en"
 ```
 
 `tless.toml` is read at startup and on every rebuild — restart the dev server after editing it.
@@ -218,6 +226,25 @@ their own path. `current` marks the page being rendered, so a theme can highligh
 
 Code blocks, inline code and frontmatter keys pass through untouched; only `title`,
 `description`, `summary` and `excerpt` are translated. Translation prompt see [SYSTEM_PROMPT](src/server/i18n.rs#L56).
+
+## Comments
+
+Post pages carry a [giscus](https://giscus.app) thread when `[giscus] repo` is set; leave it
+empty and the section disappears. Enable Discussions on the repository, install the giscus app,
+then copy `repo_id`, `category` and `category_id` from the configuration box on giscus.app.
+
+```toml
+[giscus]
+repo = "owner/name"
+repo_id = "R_kgDO…"
+category = "Announcements"
+category_id = "DIC_kwDO…"
+mapping = "pathname"           # how a page maps to a discussion
+lang = "en"                    # language of the giscus interface
+```
+
+`assets/giscus.css` for light, `assets/giscus-dark.css` for dark. The domain *`https://giscus.app`* has 
+been allowed by `tles`.
 
 ## Theme
 

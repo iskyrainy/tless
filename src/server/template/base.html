@@ -171,6 +171,39 @@ if (toc) {
     }
 }
 
+const giscus = document.querySelector('.giscus');
+if (giscus) {
+    const themes = {
+        light: giscus.dataset.giscusLight,
+        dark: giscus.dataset.giscusDark,
+    };
+    const syncGiscus = () => {
+        const frame = giscus.querySelector('iframe.giscus-frame');
+        if (!frame) return;
+        const scheme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+        frame.contentWindow.postMessage(
+            { giscus: { setConfig: { theme: themes[scheme] } } },
+            'https://giscus.app'
+        );
+    };
+    // client.js injects the frame asynchronously; sync once it has loaded and
+    // again whenever the toggle changes the page's theme.
+    const watchFrame = () => {
+        const frame = giscus.querySelector('iframe.giscus-frame');
+        if (frame && !frame.dataset.giscusWatched) {
+            frame.dataset.giscusWatched = '1';
+            frame.addEventListener('load', syncGiscus);
+            syncGiscus();
+        }
+    };
+    new MutationObserver(watchFrame).observe(giscus, { childList: true });
+    new MutationObserver(syncGiscus).observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['data-theme'],
+    });
+    window.addEventListener('load', watchFrame);
+}
+
 // Share actions on the article rail
 document.querySelectorAll('[data-share]').forEach((btn) => {
     btn.addEventListener('click', (event) => {

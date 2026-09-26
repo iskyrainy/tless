@@ -23,6 +23,7 @@ debug = false     # Exclude debug symbols entirely
 
 [dependencies]
 actix-web = "4"
+actix-cors = "0.7.2"
 arc-swap = "1.9.2"
 chrono = "0.4.45"
 chrono-tz = "0.10.4"

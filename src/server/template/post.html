@@ -86,5 +86,31 @@
         {% endif %}
     </nav>
     {% endif %}
+    {% if site.giscus.repo %}
+    <section class="comments">
+        <div class="comments-inner">
+            <h2 class="rail-label">Comments</h2>
+            <div class="giscus"
+                 data-giscus-light="{{ full_url_for(path="/assets/giscus.css") }}"
+                 data-giscus-dark="{{ full_url_for(path="/assets/giscus-dark.css") }}"></div>
+            <script src="https://giscus.app/client.js"
+                    data-repo="{{ site.giscus.repo }}"
+                    data-repo-id="{{ site.giscus.repo_id }}"
+                    data-category="{{ site.giscus.category }}"
+                    data-category-id="{{ site.giscus.category_id }}"
+                    data-mapping="{{ site.giscus.mapping }}"
+                    data-strict="0"
+                    data-reactions-enabled="1"
+                    data-emit-metadata="0"
+                    data-input-position="top"
+                    data-theme="{{ full_url_for(path="/assets/giscus.css") }}"
+                    data-lang="{{ site.giscus.lang }}"
+                    data-loading="lazy"
+                    crossorigin="anonymous"
+                    async>
+            </script>
+        </div>
+    </section>
+    {% endif %}
 </article>
 {% endblock main %}

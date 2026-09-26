@@ -21,3 +21,14 @@ provider = "deepseek"
 api_key = ""
 model = "deepseek-flash"
 target_lang = ["zh-CN", "en", "jp", "ko"]
+
+# Post comments via giscus (https://giscus.app). Copy the ids from the site's
+# configuration box into your repository's Discussions setup. Comments stay
+# hidden while `repo` is empty.
+[giscus]
+repo = ""
+repo_id = ""
+category = "Announcements"
+category_id = ""
+mapping = "pathname"
+lang = "en"

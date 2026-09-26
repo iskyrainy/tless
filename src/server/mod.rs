@@ -52,6 +52,7 @@ pub(crate) struct Site {
     pub tag: HashMap<String, ClassMap>,
     pub config: SiteConfig,
     i18n: I18nConfig,
+    giscus: GiscusConfig,
 }
 
 impl Site {
@@ -63,6 +64,7 @@ impl Site {
             tag: HashMap::new(),
             config: SiteConfig::default(),
             i18n: I18nConfig::default(),
+            giscus: GiscusConfig::default(),
         }
     }
 
@@ -86,6 +88,25 @@ pub(crate) struct ClassMap {
 pub(crate) struct Config {
     pub site: SiteConfig,
     pub i18n: Option<I18nConfig>,
+    pub giscus: Option<GiscusConfig>,
+}
+
+/// `[giscus]` configuration for post comments.
+/// # Fields
+/// * `repo` - GitHub repository holding the discussions, `owner/name`.
+/// * `repo_id` - The repository's node id, from https://giscus.app.
+/// * `category` - Discussion category the comments are filed under.
+/// * `category_id` - The category's node id.
+/// * `mapping` - How a page maps to a discussion, e.g. `pathname`.
+/// * `lang` - Language of the giscus interface.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub(crate) struct GiscusConfig {
+    pub repo: String,
+    pub repo_id: String,
+    pub category: String,
+    pub category_id: String,
+    pub mapping: String,
+    pub lang: String,
 }
 
 /// Part of `[site]` configuration details.
@@ -176,8 +197,12 @@ fn get_site() -> Site {
     let post_dir = get_source_path("post");
     let page_dir = get_source_path("page");
     let mut site = Site::new();
-    (site.config, site.i18n) = match load() {
-        Ok(config) => (config.site, config.i18n.unwrap_or_default()),
+    (site.config, site.i18n, site.giscus) = match load() {
+        Ok(config) => (
+            config.site,
+            config.i18n.unwrap_or_default(),
+            config.giscus.unwrap_or_default(),
+        ),
         Err(e) => error::fatal(format!("{e:#}")),
     };
 
