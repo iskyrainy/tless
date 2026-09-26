@@ -213,12 +213,7 @@ async fn translate_tls(
 ) -> Result<()> {
     let provider = Arc::new(provider);
     let site = SITE.load();
-    let target_langs = Arc::new(
-        target_langs
-            .iter()
-            .map(|tl| tl.get_str_value())
-            .collect::<Vec<_>>(),
-    );
+    let target_langs = Arc::new(target_langs);
 
     stream::iter(&site.post)
         .map(|d| {
@@ -243,7 +238,7 @@ async fn translate_tls(
                 POST_HASH.write().await.insert(name_key, new);
 
                 for target_lang in tls.iter() {
-                    let dst_dir = get_source_path("i18n").join(target_lang);
+                    let dst_dir = get_source_path("i18n").join(target_lang.get_str_value());
                     if !dst_dir.exists() {
                         fs::create_dir_all(&dst_dir)
                             .await
@@ -255,7 +250,7 @@ async fn translate_tls(
                         dst_file.display()
                     ))?;
 
-                    let target_str = p.translate(&md_str, target_lang).await?;
+                    let target_str = p.translate(&md_str, &target_lang.get_str()).await?;
                     file.write_all_buf(&mut target_str.as_bytes())
                         .await
                         .context(format!(
@@ -481,11 +476,17 @@ impl Language {
         serde_json::from_value(Value::String(code.to_string())).ok()
     }
 
+    #[inline]
     pub fn get_str_value(&self) -> String {
         serde_json::to_value(self)
             .ok()
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_default()
+    }
+
+    #[inline]
+    pub fn get_str(&self) -> String {
+        format!("{:?}", self)
     }
 }
 
@@ -509,6 +510,6 @@ impl From<Language> for String {
 
 impl Display for Language {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.get_str_value())
+        f.write_str(&self.get_str())
     }
 }

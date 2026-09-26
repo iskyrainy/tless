@@ -169,6 +169,26 @@ output is reproducible:
 built from. `date(ts=…)` accepts an epoch number, RFC 3339 or the `%Y-%m-%d %H:%M:%S` the CLI
 writes.
 
+### URLs
+
+Build every link with `url_for(path, relative=false)`. It returns a site-root relative path
+carrying the sub-path the site is served from, so the same theme works whether `[site] url`
+points at a domain root or at a sub-directory:
+
+| `[site] url` | `url_for(path="/assets/style.css", relative=false)` |
+| --- | --- |
+| `https://example.com` | `/assets/style.css` |
+| `https://example.com/blog` | `/blog/assets/style.css` |
+
+Absolute URLs, `//host/…`, `mailto:` and `#fragment` are returned untouched, so a menu entry
+pointing at another site keeps working.
+
+Use `full_url_for(path)` when the URL has to be absolute — feeds and sitemaps, and the giscus
+theme files, which a third-party iframe fetches.
+
+`url_for` without `relative=false` returns `./path`, which only resolves on pages at the site
+root; the base theme never uses it.
+
 Headings get anchor ids while rendering, so the generated table of contents links jump to the
 right spot.
 

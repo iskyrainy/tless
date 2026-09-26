@@ -9,7 +9,7 @@
         {% for p in posts %}
         <article class="post-entry">
             <time class="date" datetime="{{ p.date }}">{{ date(ts=p.date, fmt="%B %-d, %Y") }}</time>
-            <a class="entry-link" href="/post/{{ slugify(str=p.path, is_path=true) }}">
+            <a class="entry-link" href="{{ url_for(path="/post/" ~ slugify(str=p.path, is_path=true), relative=false) }}">
                 <h2 class="entry-title">{{ p.title }}</h2>
             </a>
             {% if p.excerpt %}<p class="entry-excerpt">{{ p.excerpt }}</p>{% endif %}
@@ -17,12 +17,12 @@
                 <div class="avatar-stack"><span class="avatar">{{ site.config.author | truncate(length=1, end="") }}</span></div>
                 <span class="byline-name">{{ site.config.author }}</span>
                 {% if p.tag %}
-                <span class="entry-cats">{% for t in p.tag %}{{ link(path="/tag/" ~ t, text=t) }}{% endfor %}</span>
+                <span class="entry-cats">{% for t in p.tag %}{{ link(path=url_for(path="/tag/" ~ t, relative=false), text=t) }}{% endfor %}</span>
                 {% endif %}
             </div>
         </article>
         {% endfor %}
     </div>
-    <p class="back-link">{{ link(path="/category", text="← All categories") }}</p>
+    <p class="back-link">{{ link(path=url_for(path="/category", relative=false), text="← All categories") }}</p>
 </div>
 {% endblock main %}

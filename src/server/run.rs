@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use tokio::{fs, select};
 use tracing::{info, warn};
 
-use crate::server::{self, get_public_path, render};
+use crate::server::{self, SITE, extract_root_path, get_public_path, render};
 
 /// Render the site once, then serve `public/` while watching for changes.
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
@@ -37,7 +37,12 @@ fn init_server(
         let cors = Cors::default()
             .allowed_origin("https://giscus.app")
             .allowed_methods(vec!["GET"]);
-        App::new().wrap(cors).service(hi).service(get_static_files)
+        App::new().wrap(cors).service(
+            web::scope(&extract_root_path(&SITE.load().config.url))
+                .service(hi)
+                .service(home)
+                .service(get_static_files),
+        )
     })
     .shutdown_signal(async move {
         // Wait ctrl_c for quit gracefully
@@ -57,6 +62,11 @@ fn init_server(
 #[get("/hi")]
 async fn hi() -> impl Responder {
     HttpResponse::Ok().body("hi")
+}
+
+#[get("")]
+async fn home() -> impl Responder {
+    get_static_file(String::new()).await
 }
 
 /// Route serving any file under `public/` (posts, pages, assets).

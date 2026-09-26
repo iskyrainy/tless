@@ -2,14 +2,14 @@
 {% block main %}
 <div class="archive">
     <header class="archive-head">
-        <h1 class="page-title">{{ site.config.title }}</h1>
-        {% if site.config.subtitle %}<p class="page-description">{{ site.config.subtitle }}</p>{% endif %}
+        <h1 class="page-title">{{ site.config.subtitle }}</h1>
+        {% if site.config.description %}<p class="page-description">{{ site.config.description }}</p>{% endif %}
     </header>
     <div class="post-feed post-feed-hero">
         {% for p in recent_posts %}
         <article class="post-entry{% if loop.first %} post-entry-featured{% endif %}">
             <time class="date" datetime="{{ p.date }}">{{ date(ts=p.date, fmt="%B %-d, %Y") }}</time>
-            <a class="entry-link" href="/post/{{ slugify(str=p.path, is_path=true) }}">
+            <a class="entry-link" href="{{ url_for(path="/post/" ~ slugify(str=p.path, is_path=true), relative=false) }}">
                 <h2 class="entry-title">{{ p.title }}</h2>
             </a>
             {% if p.excerpt %}<p class="entry-excerpt">{{ p.excerpt }}</p>{% endif %}
@@ -17,9 +17,9 @@
                 <div class="avatar-stack">
                     <span class="avatar">{{ site.config.author | truncate(length=1, end="") }}</span>
                 </div>
-                <span class="byline-name">{{ link(path="/", text=site.config.author) }}</span>
+                <span class="byline-name">{{ link(path=url_for(path="/", relative=false), text=site.config.author) }}</span>
                 {% if p.category %}
-                <span class="entry-cats">{% for c in p.category %}{{ link(path="/category/" ~ c, text=c) }}{% endfor %}</span>
+                <span class="entry-cats">{% for c in p.category %}{{ link(path=url_for(path="/category/" ~ c, relative=false), text=c) }}{% endfor %}</span>
                 {% endif %}
             </div>
         </article>
