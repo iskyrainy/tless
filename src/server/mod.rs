@@ -181,15 +181,11 @@ pub(crate) fn get_source_path<'a, S: Into<&'a str>>(name: S) -> PathBuf {
 /// Path part of a site URL, e.g. `/blog` for `https://example.com/blog`.
 #[inline]
 pub(crate) fn extract_root_path(url: &str) -> String {
-    if url.is_empty() {
-        return String::new();
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    match rest.find('/') {
+        Some(pos) => rest[pos..].trim_end_matches('/').to_string(),
+        None => String::new(),
     }
-    if let Some(pos) = url.find("://")
-        && let Some(path_pos) = url[pos + 3..].find('/')
-    {
-        return url[pos + 3 + path_pos..].to_string();
-    }
-    url.to_string()
 }
 
 /// Load [Metadata] of every source file into `SITE`, skipping unparseable files.
@@ -206,8 +202,8 @@ fn get_site() -> Site {
         Err(e) => error::fatal(format!("{e:#}")),
     };
 
-    let class_path = |c: &str, t: &str, base_url: &String| -> String {
-        format!("{}/{}/{}", extract_root_path(base_url), t, c)
+    let class_path = |c: &str, t: &str, base_url: &str| -> String {
+        format!("{}/{t}/{c}", extract_root_path(base_url))
     };
 
     let load = |site: &mut Site, dirs: Vec<PathBuf>| {

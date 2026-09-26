@@ -226,18 +226,20 @@ struct Translation {
 /// each translation in `[i18n] target_lang` order. `current` is the language of
 /// the page being rendered, `None` for the original.
 fn translations(name: &str, current: Option<&str>) -> Vec<Translation> {
+    let site = SITE.load();
+    let root = extract_root_path(&site.config.url);
     let file = format!("{name}.md");
     let i18n_dir = get_source_path("i18n");
     let mut list = vec![Translation {
         lang: String::new(),
-        url: format!("/post/{name}/"),
+        url: format!("{root}/post/{name}"),
         current: current.is_none(),
     }];
-    for lang in SITE.load().get_i18n_tl() {
+    for lang in site.get_i18n_tl() {
         if i18n_dir.join(lang).join(&file).exists() {
             list.push(Translation {
                 lang: lang.clone(),
-                url: format!("/post/{lang}/{name}"),
+                url: format!("{root}/post/{lang}/{name}"),
                 current: current == Some(lang.as_str()),
             });
         }
@@ -493,8 +495,7 @@ fn escape_xml(text: &str) -> String {
 async fn gen_atom_str() -> String {
     let site = SITE.load();
     let mut xml = String::with_capacity(409600);
-    let root_path = extract_root_path(&site.config.url);
-    let root_esc = escape_xml(&root_path);
+    let root_esc = escape_xml(site.config.url.trim_end_matches('/'));
 
     // Feed
     let _ = writeln!(xml, r#"<?xml version="1.0" encoding="utf-8"?>"#);
@@ -594,8 +595,7 @@ async fn gen_atom() -> Result<()> {
 async fn gen_sitemap_str() -> String {
     let site = SITE.load();
     let mut xml = String::with_capacity(40960);
-    let root_path = extract_root_path(&site.config.url);
-    let root_esc = escape_xml(&root_path);
+    let root_esc = escape_xml(site.config.url.trim_end_matches('/'));
 
     let _ = writeln!(xml, r#"<?xml version="1.0" encoding="utf-8"?>"#);
     let _ = writeln!(

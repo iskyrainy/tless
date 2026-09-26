@@ -45,8 +45,14 @@ fn parse_datetime(s: &str) -> DateTime<Utc> {
         .unwrap_or(Utc::now())
 }
 
+/// URLs that already point somewhere and must not be prefixed with the site
+/// root: absolute ones, protocol-relative ones, and in-page fragments.
 fn is_absolute_url(path: &str) -> bool {
-    path.starts_with("http://") || path.starts_with("https://")
+    path.starts_with("http://")
+        || path.starts_with("https://")
+        || path.starts_with("//")
+        || path.starts_with("mailto:")
+        || path.starts_with('#')
 }
 
 /// Join a relative path onto a base URL without duplicate slashes.
@@ -245,7 +251,9 @@ fn url_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
     let site_url = &SITE.load().config.url;
     let path = kwargs.must_get::<String>("path")?;
     let relative = kwargs.get::<bool>("relative")?.unwrap_or(true);
-    let res = if relative {
+    let res = if is_absolute_url(&path) {
+        path
+    } else if relative {
         if path.starts_with('/') {
             format!(".{path}")
         } else {
@@ -260,7 +268,12 @@ fn url_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
 fn full_url_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
     let site_url = &SITE.load().config.url;
     let path = kwargs.must_get::<String>("path")?;
-    Ok(Value::normal_string(&join_url(site_url, &path)))
+    let res = if is_absolute_url(&path) {
+        path
+    } else {
+        join_url(site_url, &path)
+    };
+    Ok(Value::normal_string(&res))
 }
 
 fn gravatar_helper(kwargs: Kwargs, _state: &State) -> TeraResult<Value> {
@@ -1097,6 +1110,34 @@ mod tests {
         let expected = 1788264000;
         assert_eq!(parse_datetime("2026-09-01T12:00:00Z").timestamp(), expected);
         assert_eq!(parse_datetime("2026-09-01 12:00:00").timestamp(), expected);
+    }
+
+    #[test]
+    fn extract_root_path_keeps_only_the_sub_path() {
+        assert_eq!(extract_root_path(""), "");
+        assert_eq!(extract_root_path("https://example.com"), "");
+        assert_eq!(extract_root_path("https://example.com/"), "");
+        assert_eq!(extract_root_path("https://example.com/blog"), "/blog");
+        assert_eq!(extract_root_path("https://example.com/blog/"), "/blog");
+        assert_eq!(extract_root_path("http://127.0.0.1:8917"), "");
+    }
+
+    #[test]
+    fn absolute_urls_are_never_rewritten() {
+        // `url_for` and `full_url_for` pass these through untouched, so an
+        // external link in the site menu or a `mailto:` stays as written.
+        for external in [
+            "https://cdn.example.com/a.css",
+            "http://cdn.example.com/a.css",
+            "//cdn.example.com/a.css",
+            "mailto:hi@example.com",
+            "#section",
+        ] {
+            assert!(is_absolute_url(external), "{external} should pass through");
+        }
+        for internal in ["/assets/a.css", "assets/a.css", "/post/hello"] {
+            assert!(!is_absolute_url(internal), "{internal} should be prefixed");
+        }
     }
 
     #[test]
