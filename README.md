@@ -17,11 +17,11 @@ GitHub Actions workflow.
 - **Themes** — Design your theme.
 - **Taxonomies** — tag and category pages (plus index pages) are generated automatically.
 - **Translations** — `tles site -t` translates every post with an LLM into the languages listed
-  in `[i18n] target_lang`, and the theme gets a language switcher for free.
+  in `[i18n] target_lang`.
 - **Feeds & SEO** — `atom.xml`, `sitemap.xml` and `robots.txt` are built in.
 - **Rhai helper scripts** — extend your templates with sandboxed scripts dropped into `helper/`.
 - **Deploy-ready scaffold** — `tles site -i` writes the config, theme, `.gitignore` and the
-  GitHub Pages workflow for you.
+  GitHub Pages workflow for using.
 
 ## Quick start
 
@@ -36,8 +36,8 @@ mkdir my-blog && cd my-blog
 tles site -i
 
 # write your first post
-tles blog add hello
-tles blog publish hello
+tles post add hello
+tles post publish hello
 
 # preview at http://127.0.0.1:8917
 tles server -r
@@ -191,6 +191,19 @@ root; the base theme never uses it.
 
 Headings get anchor ids while rendering, so the generated table of contents links jump to the
 right spot.
+
+A simple example for nginx proxy:
+
+```nginx
+location /blog/ {
+        add_header Content-Security-Policy upgrade-insecure-requests;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Prefix /blog;
+        proxy_pass http://127.0.0.1:8917/;
+}
+```
 
 ### Rhai helpers
 
