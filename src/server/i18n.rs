@@ -27,12 +27,14 @@ static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 struct ProviderInfo {
     api_key: String,
     model: String,
+    max_tokens: u32,
 }
 
 trait Provider: Send + Sync {
     fn base_url(&self) -> &str;
     fn api_key(&self) -> &str;
     fn model(&self) -> &str;
+    fn max_tokens(&self) -> u32;
 }
 
 macro_rules! make_provider {
@@ -48,6 +50,10 @@ macro_rules! make_provider {
 
             fn model(&self) -> &str {
                 &self.0.model
+            }
+
+            fn max_tokens(&self) -> u32 {
+                self.0.max_tokens
             }
         }
     };
@@ -117,6 +123,25 @@ Identify each input by its purpose. Translate only the source Markdown into the 
 Return only the translated Markdown content.
 "#;
 
+/// Pull the translation out of a chat-completion response.
+///
+/// A reply the model cut off at its output ceiling is rejected rather than
+/// written: publishing a half-translated post is worse than publishing none.
+fn parse_translation(data: &Value, target_lang: &str) -> Result<String> {
+    let choice = &data["choices"][0];
+    let content = choice["message"]["content"].as_str().unwrap_or("");
+    if content.is_empty() {
+        bail!("Empty translation for {target_lang}: {data}");
+    }
+    if choice["finish_reason"].as_str() == Some("length") {
+        bail!(
+            "Translation for {target_lang} was cut off at max_tokens; \
+             raise `[i18n] max_tokens` or shorten the post"
+        );
+    }
+    Ok(content.to_string())
+}
+
 #[async_trait::async_trait]
 trait TranslationBackend: Send + Sync {
     async fn translate(&self, origin_text: &str, target_lang: &str) -> Result<String>;
@@ -151,6 +176,7 @@ macro_rules! make_translate {
                         },
                     ],
                     "stream": false,
+                    "max_tokens": self.max_tokens(),
                     "thinking": {
                         "type": "disabled"
                     },
@@ -173,10 +199,7 @@ macro_rules! make_translate {
                         }
                         match resp.text().await {
                             Ok(data) => match serde_json::from_str::<Value>(&data) {
-                                Ok(data) => Ok(data["choices"][0]["message"]["content"]
-                                    .as_str()
-                                    .unwrap_or("")
-                                    .to_string()),
+                                Ok(data) => parse_translation(&data, target_lang),
                                 Err(e) => bail!("Failed to deserialize resp text: {e}"),
                             },
                             Err(e) => bail!("Failed to fetch resp text: {e}"),
@@ -207,10 +230,16 @@ impl Providers {
         Ok(s)
     }
 
-    fn into_backend(self, api_key: &str, model: &str) -> Box<dyn TranslationBackend> {
+    fn into_backend(
+        self,
+        api_key: &str,
+        model: &str,
+        max_tokens: u32,
+    ) -> Box<dyn TranslationBackend> {
         let info = ProviderInfo {
             api_key: api_key.to_owned(),
             model: model.to_owned(),
+            max_tokens,
         };
         match self {
             Providers::Deepseek => Box::new(DeepseekProvider(info)),
@@ -240,8 +269,11 @@ make_translate!(GlmProvider);
 
 pub async fn translate() -> Result<()> {
     let site = SITE.load();
-    let p =
-        Providers::create(&site.i18n.provider)?.into_backend(&site.i18n.api_key, &site.i18n.model);
+    let p = Providers::create(&site.i18n.provider)?.into_backend(
+        &site.i18n.api_key,
+        &site.i18n.model,
+        site.i18n.max_tokens,
+    );
 
     let mut tls = vec![];
     for tl in site.get_i18n_tl() {
@@ -284,7 +316,6 @@ async fn translate_tls(
                 {
                     return Ok(());
                 }
-                POST_HASH.write().await.insert(name_key, new);
 
                 for target_lang in tls.iter() {
                     let dst_dir = get_source_path("i18n").join(target_lang.get_str_value());
@@ -311,6 +342,7 @@ async fn translate_tls(
                         dst_file.display()
                     ))?;
                 }
+                POST_HASH.write().await.insert(name_key, new);
                 info!("Translate {name} finished");
 
                 Ok(())
@@ -560,5 +592,35 @@ impl From<Language> for String {
 impl Display for Language {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.get_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_translation_accepts_a_finished_reply() {
+        let data = json!({"choices": [{"message": {"content": "# 标题\n\n正文"},
+                                       "finish_reason": "stop"}]});
+        assert_eq!(parse_translation(&data, "zh-CN").unwrap(), "# 标题\n\n正文");
+    }
+
+    #[test]
+    fn parse_translation_rejects_a_truncated_reply() {
+        let data = json!({"choices": [{"message": {"content": "half a post"},
+                                       "finish_reason": "length"}]});
+        let err = parse_translation(&data, "ja").unwrap_err().to_string();
+        assert!(err.contains("cut off"), "{err}");
+        assert!(err.contains("ja"), "{err}");
+    }
+
+    #[test]
+    fn parse_translation_rejects_an_empty_or_unexpected_reply() {
+        let empty = json!({"choices": [{"message": {"content": ""}, "finish_reason": "stop"}]});
+        assert!(parse_translation(&empty, "en").is_err());
+        // a provider error payload has no choices at all
+        assert!(parse_translation(&json!({"error": {"message": "rate limited"}}), "en").is_err());
     }
 }

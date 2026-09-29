@@ -339,6 +339,42 @@ pub(crate) async fn render_page(paths: Vec<&PathBuf>) -> Result<()> {
         .collect::<Result<()>>()
 }
 
+/// Render translated posts whose source file changed, to
+/// `public/post/<lang>/<name>/index.html`. Unlike the full [render_i18n] pass
+/// these are the author's own files under `source/i18n/`, so nothing is copied
+/// in or removed.
+pub(crate) async fn render_i18n_post(paths: Vec<&PathBuf>) -> Result<()> {
+    let pub_dir = Arc::new(get_public_path("post"));
+    let ordered = Arc::new(recent_posts(SITE.load().as_ref()));
+    stream::iter(paths)
+        .map(|path| {
+            let pub_dir = pub_dir.clone();
+            let ordered = ordered.clone();
+            async move {
+                let (Some(lang), Some(name)) =
+                    (path.parent().and_then(|p| p.file_name()), path.file_stem())
+                else {
+                    return Ok(());
+                };
+                let lang = lang.to_string_lossy();
+                let name = name.to_string_lossy();
+                let dst_dir = pub_dir.join(lang.as_ref()).join(name.as_ref());
+                fs::create_dir_all(&dst_dir)
+                    .await
+                    .context(format!("Failed to create public/post/{lang}/{name}/"))?;
+                let dst_file = dst_dir.join("index.html");
+                let (prev, next) = neighbours(&ordered, path);
+                render_file(path, &dst_file, RenderType::NonOriginPost, prev, next).await?;
+                Ok(())
+            }
+        })
+        .buffer_unordered(get_cpu())
+        .collect::<Vec<Result<()>>>()
+        .await
+        .into_iter()
+        .collect::<Result<()>>()
+}
+
 async fn render_i18n() -> Result<()> {
     let i18n_dir = get_source_path("i18n");
     if !i18n_dir.exists() {

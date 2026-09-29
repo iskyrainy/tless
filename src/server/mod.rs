@@ -132,12 +132,34 @@ impl SiteConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+/// Output-token ceiling for a single translation request; long posts are cut
+/// off at the provider's default, which is well below this.
+pub const DEFAULT_MAX_TOKENS: u32 = 1 << 16;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct I18nConfig {
     pub provider: String,
     pub api_key: String,
     pub model: String,
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
     pub target_lang: Vec<String>,
+}
+
+fn default_max_tokens() -> u32 {
+    DEFAULT_MAX_TOKENS
+}
+
+impl Default for I18nConfig {
+    fn default() -> Self {
+        Self {
+            provider: String::new(),
+            api_key: String::new(),
+            model: String::new(),
+            max_tokens: DEFAULT_MAX_TOKENS,
+            target_lang: Vec::new(),
+        }
+    }
 }
 
 /// Menu item structure for site navigation.
@@ -296,6 +318,7 @@ async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
     })?;
     debouncer.watch(get_source_path("page"), notify::RecursiveMode::Recursive)?;
     debouncer.watch(get_source_path("post"), notify::RecursiveMode::Recursive)?;
+    debouncer.watch(get_source_path("i18n"), notify::RecursiveMode::Recursive)?;
 
     loop {
         select! {
@@ -313,6 +336,7 @@ async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
                         _ => {}
                     };
                 }
+                changed.retain(|path| is_source_file(path));
                 if changed.is_empty() {
                     continue;
                 }
@@ -339,7 +363,7 @@ async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
                     .iter()
                     .filter(|p| p.starts_with(get_source_path("i18n")))
                     .collect::<Vec<_>>();
-                if let Err(err) = render::ren(i18ns).await {
+                if let Err(err) = render::render_i18n_post(i18ns).await {
                     error!("Failed to render changed file: {}", err);
                 }
                 info!("Site global info reloaded.");
