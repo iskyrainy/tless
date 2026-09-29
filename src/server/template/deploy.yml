@@ -26,10 +26,10 @@ jobs:
 
       # Point this at your fork of tless if you maintain one
       - name: Install tless
-        run: cargo install --git https://github.com/iskyrainy/tless --locked
+        run: wget https://github.com/iskyrainy/tless/releases/latest/download/tles-x86_64-unknown-linux-gnu.tar.gz && tar xzf tles-x86_64-unknown-linux-gnu.tar.gz
 
       - name: Build static site
-        run: tles site -g
+        run: ./tles site -t -g
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

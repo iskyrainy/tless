@@ -335,6 +335,13 @@ async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
                 if let Err(err) = render::render_page(pages).await {
                     error!("Failed to render changed file: {}", err);
                 }
+                let i18ns = changed
+                    .iter()
+                    .filter(|p| p.starts_with(get_source_path("i18n")))
+                    .collect::<Vec<_>>();
+                if let Err(err) = render::ren(i18ns).await {
+                    error!("Failed to render changed file: {}", err);
+                }
                 info!("Site global info reloaded.");
             }
             else => {
