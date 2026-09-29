@@ -105,7 +105,6 @@ mapping = "pathname"
 lang = "en"
 
 # provider.toml
-[i18n]                         # optional; see "Translations" below
 provider = "deepseek"          # deepseek | kimi | glm
 api_key = "..."
 model = "deepseek-flash"
