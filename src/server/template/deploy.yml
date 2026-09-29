@@ -29,7 +29,7 @@ jobs:
         run: wget https://github.com/iskyrainy/tless/releases/latest/download/tles-x86_64-unknown-linux-gnu.tar.gz && tar xzf tles-x86_64-unknown-linux-gnu.tar.gz
 
       - name: Build static site
-        run: ./tles site -t -g
+        run: ./tles site -g
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

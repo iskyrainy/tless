@@ -6,6 +6,7 @@ use std::{fs, path::Path};
 use anyhow::Result;
 
 const CONFIG: &str = include_str!("tless.toml");
+const PROVIDER_CONFIG: &str = include_str!("provider.toml");
 const GITIGNORE: &str = include_str!("gitignore");
 const DEPLOY: &str = include_str!("deploy.yml");
 const ROBOTS: &str = include_str!("robots.txt");
@@ -31,6 +32,7 @@ const GISCUS_DARK: &str = include_str!("giscus-dark.css");
 /// Write the base site files, theme layouts and static assets into `site_dir`.
 pub(crate) fn write_base_site(site_dir: &Path) -> Result<()> {
     fs::write(site_dir.join("tless.toml"), CONFIG)?;
+    fs::write(site_dir.join("provider.toml"), PROVIDER_CONFIG)?;
     fs::write(site_dir.join(".gitignore"), GITIGNORE)?;
 
     let workflows = site_dir.join(".github").join("workflows");
