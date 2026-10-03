@@ -66,7 +66,7 @@ source/
   robots.txt
 theme/base/
   layout/                      # base.html, index.html, post.html, page.html, tag*.html, category*.html
-  assets/                      # style.css, highlight.css, highlight.js, giscus*.css
+  assets/                      # style.css, highlight.css, giscus*.css
 ```
 
 Names are slugified (`First Post` -> `first-post.md`), and every source file is rendered to a
@@ -168,7 +168,6 @@ output is reproducible:
 
 ```html
 {{ link(path={"href": "/tag/" ~ t, "class": "rail-tag"}, text=t) }}
-{{ js(path={"src": "/assets/highlight.js", "defer": ""}) }}
 ```
 
 `slugify(str, is_path=true)` slugifies the file name of a path, which is what post URLs are

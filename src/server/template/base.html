@@ -60,7 +60,7 @@
         <span class="footer-copy">© {{ site.config.rights }}</span>
         <nav class="footer-links" aria-label="Footer">
             {% for item in site.config.menu %}{{ link(path=url_for(path=item.link, relative=false), text=item.name) }}{% endfor %}
-            {{ link(path=url_for(path="/atom.xml", relative=false), text="RSS") }}
+            <a href={{ url_for(path="/atom.xml", relative=false) }} download="atom.xml" title="Download the Atom feed" aria-label="Download the Atom feed">RSS</a>
         </nav>
     </div>
 </footer>
@@ -238,11 +238,8 @@ document.querySelectorAll('[data-share]').forEach((btn) => {
     });
 });
 </script>
-{{ js(path={"src": url_for(path="/assets/highlight.js", relative=false), "defer": ""}) }}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.12.0/highlight.min.js" integrity="sha512-gzqHAlI1hVdzJ4wiQj/MkppDr6zgEdCoBsrXKRidcaZsSPvNQ3Fy5p7PpMt/8mltxTxMHj1Ur5NWbJdqIfpxgA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>
-// highlight.js rewrites `class="language-rust"` into the `hljs-*` token classes
-// that highlight.css styles. It is vendored with the theme rather than pulled
-// from a CDN, so highlighting works offline.
 document.addEventListener('DOMContentLoaded', () => {
     if (window.hljs) {
         document.querySelectorAll('.article-content pre code').forEach((el) => window.hljs.highlightElement(el));

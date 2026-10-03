@@ -101,10 +101,11 @@ async fn render_terms(
         async move {
             let dst_dir = out_root.join(term);
             fs::create_dir_all(&dst_dir).await?;
-            let posts = classes
+            let mut posts = classes
                 .get(term)
                 .map(|class| class.posts.clone())
                 .unwrap_or_default();
+            posts.sort_by_key(|p| Reverse(date_rank(&p.date)));
             let mut context = base_context();
             context.insert("name", term);
             context.insert("title", term);
