@@ -59,9 +59,12 @@ pub fn parse_file(path: &Path) -> Result<(Metadata, String)> {
     let mut file =
         fs::File::open(path).context(format!("Failed to open file: {}", path.display()))?;
     let mut text = String::new();
-    if file.read_to_string(&mut text).is_err() {
-        bail!("Failed to read blog.");
-    }
+    file.read_to_string(&mut text).with_context(|| {
+        format!(
+            "Failed to read {} as UTF-8 (binary file, directory, or partially written?)",
+            path.display()
+        )
+    })?;
     let (frontmatter, md_body) = frontmatter_gen::extract(&text).context(format!(
         "Failed to extract file frontmatter: {}",
         path.display()

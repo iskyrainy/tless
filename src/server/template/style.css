@@ -53,6 +53,10 @@
     }
 }
 
+@view-transition {
+  navigation: auto;
+}
+
 html[data-theme="dark"] {
     color-scheme: dark;
     --background: #151414;

@@ -87,7 +87,6 @@ pub(crate) struct ClassMap {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct Config {
     pub site: SiteConfig,
-    pub i18n: Option<I18nConfig>,
     pub giscus: Option<GiscusConfig>,
 }
 
@@ -132,12 +131,34 @@ impl SiteConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+/// Output-token ceiling for a single translation request; long posts are cut
+/// off at the provider's default, which is well below this.
+pub const DEFAULT_MAX_TOKENS: u32 = 1 << 16;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct I18nConfig {
     pub provider: String,
     pub api_key: String,
     pub model: String,
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
     pub target_lang: Vec<String>,
+}
+
+fn default_max_tokens() -> u32 {
+    DEFAULT_MAX_TOKENS
+}
+
+impl Default for I18nConfig {
+    fn default() -> Self {
+        Self {
+            provider: String::new(),
+            api_key: String::new(),
+            model: String::new(),
+            max_tokens: DEFAULT_MAX_TOKENS,
+            target_lang: Vec::new(),
+        }
+    }
 }
 
 /// Menu item structure for site navigation.
@@ -150,20 +171,26 @@ pub(crate) struct Menu {
     pub link: String,
 }
 
-/// Path to the configuration file (`tless.toml`).
-#[inline]
-fn config_path() -> PathBuf {
-    BASE_DIR.join("tless.toml")
-}
-
 /// Load `tless.toml` from the working directory.
 pub(crate) fn load() -> Result<Config> {
-    let path = config_path();
+    let path = BASE_DIR.join("tless.toml");
     if !path.exists() {
         bail!("Configuration file not found at {}", path.display());
     }
     let text = fs::read_to_string(path)?;
     Ok(toml::from_str(&text)?)
+}
+
+fn load_i18n() -> I18nConfig {
+    let path = BASE_DIR.join("provider.toml");
+    if !path.exists() {
+        return I18nConfig::default();
+    }
+    if let Ok(text) = fs::read_to_string(path) {
+        toml::from_str(&text).unwrap_or_default()
+    } else {
+        I18nConfig::default()
+    }
 }
 
 /// Timezone of the configured site, falling back to UTC.
@@ -194,11 +221,7 @@ fn get_site() -> Site {
     let page_dir = get_source_path("page");
     let mut site = Site::new();
     (site.config, site.i18n, site.giscus) = match load() {
-        Ok(config) => (
-            config.site,
-            config.i18n.unwrap_or_default(),
-            config.giscus.unwrap_or_default(),
-        ),
+        Ok(config) => (config.site, load_i18n(), config.giscus.unwrap_or_default()),
         Err(e) => error::fatal(format!("{e:#}")),
     };
 
@@ -296,6 +319,7 @@ async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
     })?;
     debouncer.watch(get_source_path("page"), notify::RecursiveMode::Recursive)?;
     debouncer.watch(get_source_path("post"), notify::RecursiveMode::Recursive)?;
+    debouncer.watch(get_source_path("i18n"), notify::RecursiveMode::Recursive)?;
 
     loop {
         select! {
@@ -313,6 +337,7 @@ async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
                         _ => {}
                     };
                 }
+                changed.retain(|path| is_source_file(path));
                 if changed.is_empty() {
                     continue;
                 }
@@ -333,6 +358,13 @@ async fn watch_source(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> 
                     .filter(|p| p.starts_with(get_source_path("page")))
                     .collect::<Vec<_>>();
                 if let Err(err) = render::render_page(pages).await {
+                    error!("Failed to render changed file: {}", err);
+                }
+                let i18ns = changed
+                    .iter()
+                    .filter(|p| p.starts_with(get_source_path("i18n")))
+                    .collect::<Vec<_>>();
+                if let Err(err) = render::render_i18n_post(i18ns).await {
                     error!("Failed to render changed file: {}", err);
                 }
                 info!("Site global info reloaded.");
