@@ -95,6 +95,7 @@ menu = [
     { name = "Tags", link = "/tag" },
     { name = "Categories", link = "/category" }
 ]
+target_lang = ["zh-CN", "en"]
 
 [giscus]                       # optional; see "Comments" below
 repo = "owner/name"
@@ -108,7 +109,6 @@ lang = "en"
 provider = "deepseek"          # deepseek | kimi | glm
 api_key = "..."
 model = "deepseek-flash"
-target_lang = ["zh-CN", "en"]
 ```
 
 `tless.toml` is read at startup and on every rebuild — restart the dev server after editing it.
@@ -233,11 +233,14 @@ writes the result to `source/i18n/<lang>/<name>.md` — one file per language in
 source in `source/post/.post_hash.json`.
 
 ```toml
-[i18n]
+# tless.toml
+[site]
+target_lang = ["zh-CN", "en"]
+
+# provider.toml
 provider = "deepseek"          # deepseek | kimi | glm
 api_key = "sk-…"
 model = "deepseek-flash"
-target_lang = ["zh-CN", "en"]  # BCP 47 codes
 ```
 
 > [!IMPORTANT]

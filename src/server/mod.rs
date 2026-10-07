@@ -69,7 +69,7 @@ impl Site {
     }
 
     pub fn get_i18n_tl(&self) -> &Vec<String> {
-        &self.i18n.target_lang
+        &self.config.target_lang
     }
 }
 
@@ -121,6 +121,7 @@ pub(crate) struct SiteConfig {
     pub theme: String,
     pub favicon: String,
     pub menu: Vec<Menu>,
+    pub target_lang: Vec<String>,
 }
 
 impl SiteConfig {
@@ -136,13 +137,12 @@ impl SiteConfig {
 pub const DEFAULT_MAX_TOKENS: u32 = 1 << 16;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct I18nConfig {
-    pub provider: String,
-    pub api_key: String,
-    pub model: String,
+struct I18nConfig {
+    provider: String,
+    api_key: String,
+    model: String,
     #[serde(default = "default_max_tokens")]
-    pub max_tokens: u32,
-    pub target_lang: Vec<String>,
+    max_tokens: u32,
 }
 
 fn default_max_tokens() -> u32 {
@@ -156,7 +156,6 @@ impl Default for I18nConfig {
             api_key: String::new(),
             model: String::new(),
             max_tokens: DEFAULT_MAX_TOKENS,
-            target_lang: Vec::new(),
         }
     }
 }
